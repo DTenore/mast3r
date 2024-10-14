@@ -127,3 +127,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Stuff included by default install
+asmk/
+checkpoints/
+dust3r/
