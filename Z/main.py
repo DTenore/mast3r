@@ -69,7 +69,7 @@ def main():
                         image_i = f"seq1/frame_{i:05d}.jpg"
                         images = [os.path.join(folder, SCENE, image_0), os.path.join(folder, SCENE, image_i)]
                         
-                        # TODO: Load intrinsics from txt files (MAYBE?)
+                        # WIP: Load intrinsics from txt files (MAYBE?)
                         # Set intrinsics if in README mode
                         intrinsics = None
                         if MODE == "README":

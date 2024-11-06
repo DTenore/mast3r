@@ -349,7 +349,7 @@ def main(reference_image_path,query_image_path):
     prediction = f"{IMAGE_I} {rot_quat[0]} {rot_quat[1]} {rot_quat[2]} {rot_quat[3]} {pose_rel[0, 3]} {pose_rel[1, 3]} {pose_rel[2, 3]} {len(inliers)}"
 
 
-    # FIXME: Are the matches wrong??
+    # fIXME: Are the matches wrong??
     visualize_matches_on_images(matches_im_map, matches_im_query, FOLDER + IMAGE_0, FOLDER + IMAGE_I, 384, 512)
 
     with open("pose_s00460.txt", "a") as file:

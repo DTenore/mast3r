@@ -30,6 +30,7 @@ from dust3r.demo import get_args_parser as dust3r_get_args_parser
 
 import matplotlib.pyplot as pl
 
+from transforms3d.quaternions import mat2quat
 
 class SparseGAState:
     def __init__(self, sparse_ga, should_delete=False, cache_dir=None, outfile_name=None):
@@ -92,6 +93,13 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
         mesh = trimesh.Trimesh(**cat_meshes(meshes))
         scene.add_geometry(mesh)
 
+    c0= cams2world[0]
+    c1= np.linalg.inv(c0) @ cams2world[1]
+    
+    print("transformation matrix")
+    print(mat2quat(c1[:3, :3]))
+    print(c1[:3, 3])   
+
     # add each camera
     for i, pose_c2w in enumerate(cams2world):
         if isinstance(cam_color, list):
@@ -101,6 +109,7 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
         add_scene_cam(scene, pose_c2w, camera_edge_color,
                       None if transparent_cams else imgs[i], focals[i],
                       imsize=imgs[i].shape[1::-1], screen_width=cam_size)
+        print(pose_c2w)
 
     rot = np.eye(4)
     rot[:3, :3] = Rotation.from_euler('y', np.deg2rad(180)).as_matrix()

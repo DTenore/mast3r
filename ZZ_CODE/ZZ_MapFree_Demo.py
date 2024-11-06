@@ -83,7 +83,7 @@ for i in tqdm.tqdm(range(5, 569, 5), file=sys.stdout):
 
     prediction = f"{IMAGE_I} {rot_quat[0]} {rot_quat[1]} {rot_quat[2]} {rot_quat[3]} {transform[0, 3]} {transform[1, 3]} {transform[2, 3]} {42}"
     
-    #FIXME: Can you Visualize matches? How?
+    #fIXME: Can you Visualize matches? How?
 
     with open("DEMO_pose_s00460.txt", "a") as file:
         file.write(prediction + "\n")
