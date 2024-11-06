@@ -7,11 +7,14 @@ import tempfile
 import sys
 import tqdm
 
+Z_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if Z_PATH not in sys.path:
+    sys.path.insert(0, Z_PATH)
+from utils import path_to_dust3r_and_mast3r
 
 from mast3r.cloud_opt.sparse_ga import sparse_global_alignment
 from mast3r.model import AsymmetricMASt3R
 
-from dust3r.image_pairs import make_pairs
 from dust3r.utils.image import load_images
 from dust3r.utils.device import to_numpy
 
@@ -22,7 +25,9 @@ from PIL import Image
 
 from transforms3d.quaternions import mat2quat
 
-sys.stderr = open(os.devnull, 'w')
+from utils.utils import visualize_matches_on_images
+
+#sys.stderr = open(os.devnull, 'w')
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -30,7 +35,7 @@ device = 'cuda'
 model_name = "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
 
 FOLDER = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/s00460/"
-IMAGE_0 = "seq1/frame_00000.jpg"
+IMAGE_0 = "seq0/frame_00000.jpg"
 
 for i in tqdm.tqdm(range(5, 569, 5), file=sys.stdout):
     IMAGE_I = "seq1/frame_" + "{:05d}".format(i) + ".jpg"
@@ -77,11 +82,23 @@ for i in tqdm.tqdm(range(5, 569, 5), file=sys.stdout):
     rot_quat = mat2quat(transform[:3, :3])
 
     prediction = f"{IMAGE_I} {rot_quat[0]} {rot_quat[1]} {rot_quat[2]} {rot_quat[3]} {transform[0, 3]} {transform[1, 3]} {transform[2, 3]} {42}"
+    
+    #FIXME: Can you Visualize matches? How?
 
     with open("DEMO_pose_s00460.txt", "a") as file:
         file.write(prediction + "\n")
 
-
+# New results
+#{
+#  "Average Median Translation Error": 1.6394335168756804,
+#  "Average Median Rotation Error": 58.91280893713621,
+#  "Average Median Reprojection Error": 354.11617415778255,
+#  "Precision @ Pose Error < (25.0cm, 5deg)": 0.0,
+#  "AUC @ Pose Error < (25.0cm, 5deg)": 0.0,
+#  "Precision @ VCRE < 90px": 0.0,
+#  "AUC @ VCRE < 90px": 0.0,
+#  "Estimates for % of frames": 0.003097842476080818
+#}
 
 #{
 #  "Average Median Translation Error": 2.5215314123662473,

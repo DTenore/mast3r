@@ -10,11 +10,12 @@ import torchvision.transforms as tvf
 from PIL import Image, ImageOps
 import math
 
+import path_to_dust3r_and_mast3r
+
 from mast3r.model import AsymmetricMASt3R
 from mast3r.fast_nn import fast_reciprocal_NNs
 from mast3r.utils.misc import mkdir_for
 
-import mast3r.utils.path_to_dust3r  # noqa
 from dust3r.inference import inference
 from dust3r.utils.geometry import geotrf
 import cv2
@@ -22,6 +23,8 @@ import tqdm
 import sys
 
 from transforms3d.quaternions import mat2quat
+
+from utils import visualize_matches_on_images
 
 sys.stderr = open(os.devnull, 'w')
 
@@ -343,7 +346,11 @@ def main(reference_image_path,query_image_path):
     #print(pose_rel)
 
     rot_quat = mat2quat(pose_rel[:3, :3])
-    prediction = f"{IMAGE_I} {rot_quat[0]} {rot_quat[1]} {rot_quat[2]} {rot_quat[3]} {pose_rel[0, 3]} {pose_rel[1, 3]} {pose_rel[2, 3]} {num_inliers}"
+    prediction = f"{IMAGE_I} {rot_quat[0]} {rot_quat[1]} {rot_quat[2]} {rot_quat[3]} {pose_rel[0, 3]} {pose_rel[1, 3]} {pose_rel[2, 3]} {len(inliers)}"
+
+
+    # FIXME: Are the matches wrong??
+    visualize_matches_on_images(matches_im_map, matches_im_query, FOLDER + IMAGE_0, FOLDER + IMAGE_I, 384, 512)
 
     with open("pose_s00460.txt", "a") as file:
         file.write(prediction + "\n")
@@ -351,17 +358,32 @@ def main(reference_image_path,query_image_path):
 
 if __name__ == '__main__':
     FOLDER = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/s00460/"
-    IMAGE_0 = "seq1/frame_00000.jpg"
+    IMAGE_0 = "seq0/frame_00000.jpg"
     
     #Clear the file before writing
     with open("pose_s00460.txt", "w") as file:
         file.write("")
 
-    for i in tqdm.tqdm(range(5, 566, 5), file=sys.stdout):
+    for i in tqdm.tqdm(range(0, 566, 5), file=sys.stdout):
         IMAGE_I = "seq1/frame_" + "{:05d}".format(i) + ".jpg"
         main(FOLDER + IMAGE_0, FOLDER + IMAGE_I)
     #Create zip file
     os.system("zip -r submission.zip pose_s00460.txt")
+
+
+# New results
+#{
+#  "Average Median Translation Error": 0.21678989935777532,
+#  "Average Median Rotation Error": 1.4698650847998884,
+#  "Average Median Reprojection Error": 42.75970367649505,
+#  "Precision @ Pose Error < (25.0cm, 5deg)": 0.0010417523370891246,
+#  "AUC @ Pose Error < (25.0cm, 5deg)": 0.0012179235627029247,
+#  "Precision @ VCRE < 90px": 0.0015077994352605752,
+#  "AUC @ VCRE < 90px": 0.0018754657680541786,
+#  "Estimates for % of frames": 0.0019738465334320256
+#}
+
+
 
 #
 #WARNING:root:Submission is missing pose estimates for 56 frames
@@ -375,3 +397,4 @@ if __name__ == '__main__':
 #  "AUC @ VCRE < 90px": 0.0,
 #  "Estimates for % of frames": 0.5087719298245614
 #}
+

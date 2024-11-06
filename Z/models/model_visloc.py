@@ -1,3 +1,6 @@
+# TODO: investigate why some images are not processed by Visloc
+# TODO: add fine part for coarse to fine
+
 #!/usr/bin/env python3
 # --------------------------------------------------------
 # Idea: Use Visloc code for mapfree
