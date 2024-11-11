@@ -19,11 +19,11 @@ if Z_PATH not in sys.path:
 from utils import path_to_dust3r_and_mast3r
 
 from mast3r.model import AsymmetricMASt3R
-from mast3r.fast_nn import fast_reciprocal_NNs
+from mast3r.fast_nn import fast_reciprocal_NNs, extract_correspondences_nonsym
 from mast3r.utils.misc import mkdir_for
 
 from dust3r.inference import inference
-from dust3r.utils.geometry import geotrf
+from dust3r.utils.image import load_images
 import cv2
 import tqdm
 import sys
@@ -66,6 +66,15 @@ def coarse_matching(query_view, map_view, model, device, pixel_tol, fast_nn_para
     matches_im_map, matches_im_query = fast_reciprocal_NNs(
         PM, PQ, subsample_or_initxy1=8, **fast_nn_params)
 
+    #FIXME: this doesnt seem much better...
+    corres = extract_correspondences_nonsym(desc_list[0], desc_list[1], conf_list[0], conf_list[1])
+
+
+    conf = corres[2]
+    __mask = conf >= 0.8
+    matches_im_map = corres[1][__mask].cpu().numpy()
+    matches_im_query = corres[0][__mask].cpu().numpy()
+
     # Apply confidence threshold
     HM, WM = map_view['rgb_rescaled'].shape[1:]
     HQ, WQ = query_view['rgb_rescaled'].shape[1:]
@@ -77,7 +86,7 @@ def coarse_matching(query_view, map_view, model, device, pixel_tol, fast_nn_para
     valid_matches = valid_matches_map & valid_matches_query
     matches_im_map = matches_im_map[valid_matches]
     matches_im_query = matches_im_query[valid_matches]
-    
+
     matches_confs = np.minimum(
         conf_list[1][matches_im_map[:, 1], matches_im_map[:, 0]],
         conf_list[0][matches_im_query[:, 1], matches_im_query[:, 0]]
@@ -86,19 +95,9 @@ def coarse_matching(query_view, map_view, model, device, pixel_tol, fast_nn_para
     # Adjust coordinates (from cv2 to colmap and back)
     matches_im_query = matches_im_query.astype(np.float64)
     matches_im_map = matches_im_map.astype(np.float64)
-    matches_im_query[:, 0] += 0.5
-    matches_im_query[:, 1] += 0.5
-    matches_im_map[:, 0] += 0.5
-    matches_im_map[:, 1] += 0.5
-    # Rescale coordinates (assuming no scaling)
-    # From colmap back to cv2
-    matches_im_query[:, 0] -= 0.5
-    matches_im_query[:, 1] -= 0.5
-    matches_im_map[:, 0] -= 0.5
-    matches_im_map[:, 1] -= 0.5
     return [], matches_im_query, matches_im_map, matches_confs, output  # Return output for pointmaps
 
-def resize_and_pad_image(img, max_size, patch_size=16):
+def resize_image(img, max_size, patch_size=16):
     """
     Resize the image so that the largest dimension does not exceed max_size.
     Then pad the image so that both height and width are multiples of patch_size.
@@ -110,32 +109,15 @@ def resize_and_pad_image(img, max_size, patch_size=16):
         new_W = int(W * scaling_factor)
         new_H = int(H * scaling_factor)
         img = img.resize((new_W, new_H), Image.BICUBIC)
-    else:
-        new_W, new_H = W, H
 
-    # Calculate padding to make new_W and new_H multiples of patch_size
-    pad_W = (patch_size - new_W % patch_size) if new_W % patch_size != 0 else 0
-    pad_H = (patch_size - new_H % patch_size) if new_H % patch_size != 0 else 0
+    return img
 
-    if pad_W != 0 or pad_H != 0:
-        pad_left = pad_W // 2
-        pad_right = pad_W - pad_left
-        pad_top = pad_H // 2
-        pad_bottom = pad_H - pad_top
-        padding = (pad_left, pad_top, pad_right, pad_bottom)  # left, top, right, bottom
-        img = ImageOps.expand(img, padding)
-    else:
-        padding = (0, 0, 0, 0)
-
-    return img, padding
-
-def scale_intrinsics(K, original_size, new_size, padding):
+def scale_intrinsics(K, original_size, new_size):
     """
     Scale the camera intrinsics based on the resizing and padding applied to the image.
     """
     W_orig, H_orig = original_size
     W_new, H_new = new_size
-    pad_left, pad_top, pad_right, pad_bottom = padding
 
     scaling_factor_x = W_new / W_orig
     scaling_factor_y = H_new / H_orig
@@ -143,10 +125,6 @@ def scale_intrinsics(K, original_size, new_size, padding):
     K_scaled = K.copy()
     K_scaled[0, :] *= scaling_factor_x
     K_scaled[1, :] *= scaling_factor_y
-
-    # Adjust the principal point based on padding
-    K_scaled[0, 2] += pad_left
-    K_scaled[1, 2] += pad_top
 
     return K_scaled
 
@@ -175,6 +153,10 @@ def compute_scale_factor(pts3d_query, pts3d_map, R, t, use_median=False):
     return s
 
 def get_prediction(model_name, device, intrinsics, images, image_name):
+    K1 = intrinsics[0]
+    K2 = intrinsics[1]
+
+
     reference_image_path,query_image_path = images
     conf_thr = 0.8
     max_image_size = 512
@@ -194,12 +176,12 @@ def get_prediction(model_name, device, intrinsics, images, image_name):
 
     # Resize and pad images
     patch_size = 16  # As per model's requirement
-    query_rgb_resized, query_padding = resize_and_pad_image(query_rgb, max_image_size, patch_size)
-    reference_rgb_resized, reference_padding = resize_and_pad_image(reference_rgb, max_image_size, patch_size)
-
-    # Update the image sizes after resizing and padding
+    query_rgb_resized = resize_image(query_rgb, max_image_size, patch_size)
+    reference_rgb_resized = resize_image(reference_rgb, max_image_size, patch_size)
+     # Update the image sizes after resizing and padding
     WQ, HQ = query_rgb_resized.size
     WM, HM = reference_rgb_resized.size
+   
 
     
     # Set Default Intrinsics using Ground Truth
@@ -213,21 +195,19 @@ def get_prediction(model_name, device, intrinsics, images, image_name):
         return K
 
 
-    query_intrinsics = default_intrinsics()
-    reference_intrinsics = default_intrinsics()
+    query_intrinsics = K1
+    reference_intrinsics = K2
 
     # Scale intrinsics based on resizing and padding
     query_intrinsics = scale_intrinsics(
         query_intrinsics,
         (WQ_original, HQ_original),
         (WQ, HQ),
-        query_padding
     )
     reference_intrinsics = scale_intrinsics(
         reference_intrinsics,
         (WM_original, HM_original),
         (WM, HM),
-        reference_padding
     )
 
     
@@ -269,7 +249,7 @@ def get_prediction(model_name, device, intrinsics, images, image_name):
 
     
     # Apply Confidence Threshold
-    if len(matches_conf) > 0:
+    if len(matches_conf) < 0:
         mask = matches_conf >= conf_thr
         matches_im_query = matches_im_query[mask]
         matches_im_map = matches_im_map[mask]
@@ -279,7 +259,8 @@ def get_prediction(model_name, device, intrinsics, images, image_name):
     points_query = matches_im_query.astype(np.float64)
     points_map = matches_im_map.astype(np.float64)
 
-    
+    #visualize_matches_on_images(points_map, points_query, reference_image_path,query_image_path, 384, 512)
+
     # Estimate Essential Matrix using RANSAC
     E, mask_E = cv2.findEssentialMat(
         points_map,
@@ -288,15 +269,11 @@ def get_prediction(model_name, device, intrinsics, images, image_name):
         pp=(query_intrinsics[0, 2], query_intrinsics[1, 2]),
         method=cv2.RANSAC,
         prob=0.999,
-        threshold=1.0 # Adjust threshold as needed
+        threshold=5.0 # Adjust threshold as needed
     )
 
     if E is None:
-        prediction = f"{IMAGE_I} 0 0 0 0 0 0 0 42"
-
-        with open("pose_s00460.txt", "a") as file:
-            file.write(prediction + "\n")
-        # It fails here on MapFree
+        return None
     
     # Select Inlier Matches
     mask_E = mask_E.astype(bool).ravel()

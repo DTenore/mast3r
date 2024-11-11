@@ -65,7 +65,7 @@ def get_mast3r_output(MODEL_NAME, IMAGES, DEVICE, BORDER):
 def get_prediction(model_name, device, intrinsics, imgs, image_name):
     matches_im0, matches_im1, pts3d_im0, pts3d_im1, valid_matches = get_mast3r_output(model_name, imgs, device, 3)
 
-    scale_K = scale_intrinsics(np.array(intrinsics), 540, 720, 384, 512)
+    scale_K = scale_intrinsics(np.array(intrinsics[0]), 540, 720, 384, 512)
 
     # Predicted Transform copied from visloc.py
     ret_val, transform = run_poselib(matches_im1.astype(np.float32), pts3d_im0[matches_im0[:, 1], matches_im0[:, 0], :], scale_K, 288, 512)

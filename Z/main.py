@@ -13,7 +13,7 @@ if Z_PATH not in sys.path:
 
 # Import project-specific modules
 from utils import path_to_dust3r_and_mast3r
-from utils.file_io import write_prediction
+from utils.file_io import write_prediction, load_intrinsics
 from utils.utils import load_image_pair
 
 sys.stderr = open(os.devnull, 'w')
@@ -25,10 +25,12 @@ output_file = os.path.join(os.path.dirname(__file__), "pose_s00460.txt")
 folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/"
 image_0 = "seq0/frame_00000.jpg"
 
-MODE = "VISLOC"
-SCENES = ["s00460", "s00461"]
-# SCENES = [f"s{i:05d}" for i in range(460, 525)]
+MODE = "NEW"
+#SCENES = ["s00460"]
+SCENES = [f"s{i:05d}" for i in range(460, 525, 10)]
 ZIP_OUTPUT_PATH = "/home/dario/_MINE/mast3r"
+
+START = 0
 
 # Conditional import based on mode
 def get_prediction_function():
@@ -38,6 +40,10 @@ def get_prediction_function():
         from models.model_readme import get_prediction
     elif MODE == "VISLOC":
         from models.model_visloc import get_prediction
+    elif MODE == "TRY":
+        from models.model_try import get_prediction
+    elif MODE == "NEW":
+        from models.model_new import get_prediction
     else:
         raise ValueError(f"Unknown MODE: {MODE}")
     return get_prediction
@@ -53,7 +59,10 @@ def main():
     # **Top-level progress bar for all scenes**
     with tqdm.tqdm(SCENES, desc="Processing scenes", file=sys.stdout) as scene_pbar:
         for SCENE in scene_pbar:
-            scene_file_path = temp_dir / f"{SCENE}.txt"
+            intrinsics_dict, frame_width, frame_height = load_intrinsics(os.path.join(folder, SCENE, "intrinsics.txt"))
+            intrincics_0 = intrinsics_dict[image_0]
+
+            scene_file_path = temp_dir / f"pose_{SCENE}.txt"
             scene_pbar.set_description(f"Processing scene {SCENE}")
 
             # Count number of frames in the scene folder
@@ -63,23 +72,27 @@ def main():
             # Open file for the current scene
             with scene_file_path.open("w") as scene_file:
                 # **Single progress bar for frames within the current scene**
-                with tqdm.tqdm(total=num_frames // 5, desc=f"Processing frames for {SCENE}", leave=False, file=sys.stdout) as frame_pbar:
+                with tqdm.tqdm(total=(num_frames-START) // 5, desc=f"Processing frame", leave=False, file=sys.stdout) as frame_pbar:
                     # Process images and generate predictions
-                    for i in range(0, num_frames, 5):
+                    for i in range(START, num_frames, 5):
+                        frame_pbar.set_description(f"Processing frame {i:05d}")
+
                         image_i = f"seq1/frame_{i:05d}.jpg"
                         images = [os.path.join(folder, SCENE, image_0), os.path.join(folder, SCENE, image_i)]
                         
-                        # WIP: Load intrinsics from txt files (MAYBE?)
+                        if image_i not in intrinsics_dict:
+                            scene_pbar.write(f"Missing intrinsics for {image_i} in scene {SCENE}, skipping.")
+                            continue
+
+                        intrincics_i = intrinsics_dict[image_i]
+
                         # Set intrinsics if in README mode
-                        intrinsics = None
-                        if MODE == "README":
-                            intrinsics = [[590.3821, 0, 269.6031], 
-                                          [0, 590.3821, 270.2328], 
-                                          [0, 0, 1]]
+                        intrinsics = [intrincics_0, intrincics_i]
                         
                         # Get prediction and write to output file
                         prediction = get_prediction(model_name, device, intrinsics, images, image_i)
-                        scene_file.write(prediction + '\n')
+                        if(prediction):
+                            scene_file.write(prediction + '\n')
                         
                         # Update frame progress bar
                         frame_pbar.update(1)
