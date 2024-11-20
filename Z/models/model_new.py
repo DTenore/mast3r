@@ -23,7 +23,7 @@ import sys
 
 from transforms3d.quaternions import mat2quat
 
-from utils.utils import scale_intrinsics
+from utils.utils import scale_intrinsics, visualize_all_features
 
 from sklearn.linear_model import RANSACRegressor
 
@@ -109,8 +109,8 @@ def compute_scale_factor_ransac_corrected(pts3d_query, pts3d_map, R, t):
 def printer(q, t):
     return f"{q[0]} {q[1]} {q[2]} {q[3]} {t[0][0]} {t[1][0]} {t[2][0]}"
 
-def get_prediction(model_name, device, intrinsics, IMAGES, image_name): 
-    SCALE_MODE = "ransac_2"
+def get_prediction(model_name, device, intrinsics, IMAGES, image_name, visualize=False): 
+    SCALE_MODE = "median"
 
     model = AsymmetricMASt3R.from_pretrained(model_name).to(device)
     images = load_images(IMAGES, size=512, verbose=False)
@@ -164,9 +164,12 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name):
         return ""
 
     # Compute the Essential Matrix
-    E, mask = cv2.findEssentialMat(points1, points2, cameraMatrix=K1, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+    #TODO: replace with poselib
+    #TODO: normalize and use both intrinsics, also adjust threshold!!!
+    E, mask = cv2.findEssentialMat(points1, points2, cameraMatrix=K1, method=cv2.USAC_MAGSAC, prob=0.999, threshold=1.0)
 
     # Recover the pose from the Essential Matrix
+    #TODO: replace with poselib
     _, R, t, mask_pose = cv2.recoverPose(E, points1, points2, cameraMatrix=K1)
 
     quat = mat2quat(R)
@@ -201,6 +204,9 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name):
 
     res = printer(quat, t_scaled)
 
+    if visualize:
+        visualize_all_features(points1_inliers, points2_inliers, IMAGES[0], IMAGES[1], 384, 512)
+
     return f"{image_name} {res} {len(valid_matches)}"
 
 # Mode median
@@ -220,7 +226,7 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name):
 #{
 #  "Average Median Translation Error": 1.4690356688515631,
 #  "Average Median Rotation Error": 2.7497896384005243,
-#  "Average Median Reprojection Error": 296.8197906816472,
+  #"Average Median Reprojection Error": 296.8197906816472,
 #  "Precision @ Pose Error < (25.0cm, 5deg)": 0.0002741453518655591,
 #  "AUC @ Pose Error < (25.0cm, 5deg)": 0.0003337958372204225,
 #  "Precision @ VCRE < 90px": 0.0005482907037311182,
@@ -232,7 +238,7 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name):
 #{
 #  "Average Median Translation Error": 0.3230706364406601,
 #  "Average Median Rotation Error": 2.7497896384005243,
-#  "Average Median Reprojection Error": 51.31979967965075,
+ # "Average Median Reprojection Error": 51.31979967965075,
 #  "Precision @ Pose Error < (25.0cm, 5deg)": 0.0010965814074622364,
 #  "AUC @ Pose Error < (25.0cm, 5deg)": 0.0016430161840121226,
 #  "Precision @ VCRE < 90px": 0.0023302354908572524,
@@ -253,4 +259,16 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name):
 #  "Precision @ VCRE < 90px": 0.008246321784527765,
 #  "AUC @ VCRE < 90px": 0.008917280715749269,
 #  "Estimates for % of frames": 0.02215828191741813
+#}
+
+# BIIIIIIIG and Median
+#{
+#  "Average Median Translation Error": 1.4327915169474361,
+#  "Average Median Rotation Error": 5.8156609131032,
+#  "Average Median Reprojection Error": 192.6193295486678,
+#  "Precision @ Pose Error < (25.0cm, 5deg)": 0.00531863765979943,
+#  "AUC @ Pose Error < (25.0cm, 5deg)": 0.006499850060766222,
+#  "Precision @ VCRE < 90px": 0.012014994713402326,
+#  "AUC @ VCRE < 90px": 0.01366252807065593,
+#  "Estimates for % of frames": 0.04274134119380987
 #}

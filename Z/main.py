@@ -26,11 +26,13 @@ folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/"
 image_0 = "seq0/frame_00000.jpg"
 
 MODE = "NEW"
-#SCENES = ["s00460"]
-SCENES = [f"s{i:05d}" for i in range(460, 525, 10)]
+SCENES = ["s00460"]
+#SCENES = [f"s{i:05d}" for i in range(460, 525, 5)]
 ZIP_OUTPUT_PATH = "/home/dario/_MINE/mast3r"
 
 START = 0
+VISUALIZE = False
+VISUALIZE_INTERVAL = 5 # Visualize every 5 predictions NOT every 5 frames
 
 # Conditional import based on mode
 def get_prediction_function():
@@ -53,7 +55,7 @@ def main():
 
     # Create temporary folder for submission
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    temp_dir = Path(__file__).parent / f"submission-{timestamp}"
+    temp_dir = Path(__file__).parent / f"_tmp/submission-{MODE}-{timestamp}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     # **Top-level progress bar for all scenes**
@@ -63,7 +65,7 @@ def main():
             intrincics_0 = intrinsics_dict[image_0]
 
             scene_file_path = temp_dir / f"pose_{SCENE}.txt"
-            scene_pbar.set_description(f"Processing scene {SCENE}")
+            scene_pbar.set_description(f"Processing scene {SCENE[1:]}")
 
             # Count number of frames in the scene folder
             scene_folder = Path(folder) / SCENE / "seq1"
@@ -72,7 +74,7 @@ def main():
             # Open file for the current scene
             with scene_file_path.open("w") as scene_file:
                 # **Single progress bar for frames within the current scene**
-                with tqdm.tqdm(total=(num_frames-START) // 5, desc=f"Processing frame", leave=False, file=sys.stdout) as frame_pbar:
+                with tqdm.tqdm(total=(num_frames-START) // 5, desc=f"Processing frames", leave=False, file=sys.stdout) as frame_pbar:
                     # Process images and generate predictions
                     for i in range(START, num_frames, 5):
                         frame_pbar.set_description(f"Processing frame {i:05d}")
@@ -89,8 +91,10 @@ def main():
                         # Set intrinsics if in README mode
                         intrinsics = [intrincics_0, intrincics_i]
                         
+                        visualization = VISUALIZE and ((i/5) % VISUALIZE_INTERVAL == 0)
+
                         # Get prediction and write to output file
-                        prediction = get_prediction(model_name, device, intrinsics, images, image_i)
+                        prediction = get_prediction(model_name, device, intrinsics, images, image_i, visualize=visualization)
                         if(prediction):
                             scene_file.write(prediction + '\n')
                         
@@ -98,7 +102,7 @@ def main():
                         frame_pbar.update(1)
 
     # Zip the temporary folder and save to the predefined location
-    zip_file_path = Path(ZIP_OUTPUT_PATH) / f"submission-{timestamp}.zip"
+    zip_file_path = Path(ZIP_OUTPUT_PATH) / f"submission-{MODE}-{timestamp}.zip"
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file in temp_dir.glob('*'):
             zipf.write(file, arcname=file.name)

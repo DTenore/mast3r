@@ -159,6 +159,7 @@ def visualize_few_matches(matches_im0, matches_im1, view1, view2, n_viz=20):
     pl.show(block=True)
 
 def visualize_matches_on_images(matches_im0, matches_im1, path0, path1, w, h, n_viz=20):
+    """ Use paths for visualization """
     img0 = cv2.resize(cv2.cvtColor(cv2.imread(path0), cv2.COLOR_BGR2RGB), (w, h))
     img1 = cv2.resize(cv2.cvtColor(cv2.imread(path1), cv2.COLOR_BGR2RGB), (w, h)) 
 
@@ -176,6 +177,40 @@ def visualize_matches_on_images(matches_im0, matches_im1, path0, path1, w, h, n_
         pl.plot([x0, x1 + W0], [y0, y1], '-+', color=cmap(i / (n_viz - 1)), scalex=False, scaley=False)
     pl.show(block=True)
 
+def visualize_all_features(matches_im0, matches_im1, path0, path1, w, h, n_viz=20):
+    """ Visualizes all features with gradient-colored dots and shows a specified number of matches with the same colors. """
+    img0 = cv2.resize(cv2.cvtColor(cv2.imread(path0), cv2.COLOR_BGR2RGB), (w, h))
+    img1 = cv2.resize(cv2.cvtColor(cv2.imread(path1), cv2.COLOR_BGR2RGB), (w, h)) 
+
+    H0, W0 = img0.shape[:2] 
+    H1, W1 = img1.shape[:2]
+    num_matches = matches_im0.shape[0]
+    match_idx_to_viz = np.round(np.linspace(0, num_matches - 1, n_viz)).astype(int)
+    viz_matches_im0, viz_matches_im1 = matches_im0[match_idx_to_viz], matches_im1[match_idx_to_viz]
+    
+    img = np.concatenate((img0, img1), axis=1)
+    pl.figure()
+    pl.imshow(img)
+    cmap = pl.get_cmap('jet')
+
+    # Plot all features as gradient-colored dots
+    for i in range(num_matches):
+        color = cmap(i / (num_matches - 1))  # Color gradient based on total number of matches
+        (x0, y0), (x1, y1) = matches_im0[i], matches_im1[i]
+        pl.plot(x0, y0, 'o', color=color, markersize=2)      # Dot for features in img0
+        pl.plot(x1 + W0, y1, 'o', color=color, markersize=2)  # Dot for features in img1 with offset
+
+    # Plot selected matches with lines using the same color as dots
+    for i in range(n_viz):
+        (x0, y0), (x1, y1) = viz_matches_im0[i].T, viz_matches_im1[i].T
+        color = cmap(match_idx_to_viz[i] / (num_matches - 1))  # Consistent color for selected matches
+        pl.plot([x0, x1 + W0], [y0, y1], '-+', color=color, scalex=False, scaley=False)
+    
+    pl.show(block=True)
+
+
 def load_image_pair(image_paths, size=512):
     """Loads and returns a pair of images from specified paths."""
     return load_images(image_paths, size=size)
+
+ 
