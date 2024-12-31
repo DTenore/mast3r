@@ -27,6 +27,8 @@ from utils.utils import scale_intrinsics, visualize_all_features
 
 from sklearn.linear_model import RANSACRegressor
 
+import poselib
+
 def compute_scale_factor(pts3d_query, pts3d_map, R, t, use_median=True):
     """
     Computes the scale factor to align the translation vector using 3D point clouds.
@@ -163,14 +165,56 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name, visualize
     if (len(points1) < 5) or (len(points2) < 5):
         return ""
 
-    # Compute the Essential Matrix
-    #TODO: replace with poselib
     #TODO: normalize and use both intrinsics, also adjust threshold!!!
-    E, mask = cv2.findEssentialMat(points1, points2, cameraMatrix=K1, method=cv2.USAC_MAGSAC, prob=0.999, threshold=1.0)
 
-    # Recover the pose from the Essential Matrix
-    #TODO: replace with poselib
-    _, R, t, mask_pose = cv2.recoverPose(E, points1, points2, cameraMatrix=K1)
+    if False:    
+        # Compute the Essential Matrix
+        #WIP: replace with poselib
+        E, mask = cv2.findEssentialMat(points1, points2, cameraMatrix=K1, method=cv2.USAC_MAGSAC, prob=0.999, threshold=1.0)
+        # Recover the pose from the Essential Matrix
+        #WIP: replace with poselib
+        _, R, t, mask_pose = cv2.recoverPose(E, points1, points2, cameraMatrix=K1)
+
+    else:
+        camera1 = {
+            'model': 'PINHOLE',
+            'width': 384,   # Replace with the actual image width
+            'height': 512, # Replace with the actual image height
+            'params': [K1[0, 0], K1[1, 1], K1[0, 2], K1[1, 2]]  # fx, fy, cx, cy
+        }
+
+        camera2 = {
+            'model': 'PINHOLE',
+            'width': 384,   
+            'height': 512, 
+            'params': [K2[0, 0], K2[1, 1], K2[0, 2], K2[1, 2]]  # fx, fy, cx, cy
+        }
+
+        # Initialize RANSAC and Bundle Adjustment options as dictionaries
+        ransac_options = poselib.RansacOptions()
+        bundle_options = poselib.BundleOptions()
+
+        # Set RANSAC options by assigning key-value pairs
+        ransac_options['max_epipolar_error'] = 1.0  # Set threshold as needed
+        ransac_options['success_prob'] = 0.999
+
+        # Estimate the relative pose
+        pose, info = poselib.estimate_relative_pose(
+            points1, points2, camera1, camera2, ransac_options, bundle_options
+        )
+
+        # Extract rotation (R) and translation (t) from the pose
+        R = pose.R
+        t = pose.t
+
+        t = t.reshape(-1, 1)
+
+        # 'info' contains additional information about the estimation process, such as inliers
+        inliers = info['inliers']  # List of boolean values indicating inliers
+
+        # Convert the inliers list to a mask array similar to OpenCV's output
+        mask = np.array(inliers, dtype=np.uint8).reshape(-1, 1)
+
 
     quat = mat2quat(R)
     
@@ -271,4 +315,17 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name, visualize
 #  "Precision @ VCRE < 90px": 0.012014994713402326,
 #  "AUC @ VCRE < 90px": 0.01366252807065593,
 #  "Estimates for % of frames": 0.04274134119380987
+#}
+
+
+# Poselib
+#{
+#  "Average Median Translation Error": 1.4123356789362238,
+#  "Average Median Rotation Error": 5.53879148295968,
+#  "Average Median Reprojection Error": 193.06656720150448,
+#  "Precision @ Pose Error < (25.0cm, 5deg)": 0.13493253373313344,
+#  "AUC @ Pose Error < (25.0cm, 5deg)": 0.006898831888214502,
+#  "Precision @ VCRE < 90px": 0.2848575712143928,
+#  "AUC @ VCRE < 90px": 0.013756940338455849,
+#  "Estimates for % of frames": 1.0
 #}
