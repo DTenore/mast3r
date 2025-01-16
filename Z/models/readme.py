@@ -62,7 +62,7 @@ def get_mast3r_output(MODEL_NAME, IMAGES, DEVICE, BORDER):
 
     return matches_im0, matches_im1, pts3d_im0, pts3d_im1, valid_matches
 
-def get_prediction(model_name, device, intrinsics, imgs, image_name):
+def get_prediction(model_name, device, intrinsics, imgs, image_name, visualize):
     matches_im0, matches_im1, pts3d_im0, pts3d_im1, valid_matches = get_mast3r_output(model_name, imgs, device, 3)
 
     scale_K = scale_intrinsics(np.array(intrinsics[0]), 540, 720, 384, 512)

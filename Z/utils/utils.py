@@ -207,10 +207,4 @@ def visualize_all_features(matches_im0, matches_im1, path0, path1, w, h, n_viz=2
         pl.plot([x0, x1 + W0], [y0, y1], '-+', color=color, scalex=False, scaley=False)
     
     pl.show(block=True)
-
-
-def load_image_pair(image_paths, size=512):
-    """Loads and returns a pair of images from specified paths."""
-    return load_images(image_paths, size=size)
-
  

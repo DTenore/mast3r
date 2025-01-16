@@ -14,10 +14,10 @@ if Z_PATH not in sys.path:
 # Import project-specific modules
 from utils import path_to_dust3r_and_mast3r
 from utils.file_io import write_prediction, load_intrinsics
-from utils.utils import load_image_pair
 
 import importlib
 
+# This can suppress all errors -> not recommended for now
 #sys.stderr = open(os.devnull, 'w')
 
 # Parameters
@@ -27,10 +27,18 @@ output_file = os.path.join(os.path.dirname(__file__), "pose_s00460.txt")
 folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/"
 image_0 = "seq0/frame_00000.jpg"
 
-MODEL = "baseline"
-SCENES = ["s00465"]
-#SCENES = [f"s{i:05d}" for i in range(460, 525, 5)]
-ZIP_OUTPUT_PATH = "/home/dario/_MINE/mast3r"
+MODEL = "baseline_a_dino"
+SIZE = "L"
+
+scenes = {}
+scenes["S"] = ["s00465"]
+scenes["M"] = ["s00465", "s00475", "s00485", "s00495"]
+scenes["L"] = [f"s{i:05d}" for i in range(460, 525, 5)]
+scenes["XL"] = [f"s{i:05d}" for i in range(460, 525, 1)]
+
+SCENES = scenes[SIZE]
+
+ZIP_OUTPUT_PATH = "/home/dario/_MINE/mast3r/Z/_submissions"
 
 START = 0
 VISUALIZE = False
@@ -90,6 +98,7 @@ def main():
                         # Set intrinsics if in README mode
                         intrinsics = [intrincics_0, intrincics_i]
                         
+                        # Only visualize if flag is set and every n-th desired prediction
                         visualization = VISUALIZE and ((i/5) % VISUALIZE_INTERVAL == 0)
 
                         # Get prediction and write to output file
@@ -100,8 +109,13 @@ def main():
                         # Update frame progress bar
                         frame_pbar.update(1)
 
+    
+    # Ensure the output directory exists
+    output_dir = Path(ZIP_OUTPUT_PATH)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Zip the temporary folder and save to the predefined location
-    zip_file_path = Path(ZIP_OUTPUT_PATH) / f"submission-{MODEL}-{timestamp}.zip"
+    zip_file_path = output_dir / f"{timestamp}-{MODEL}-{SIZE}.zip"
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file in temp_dir.glob('*'):
             zipf.write(file, arcname=file.name)

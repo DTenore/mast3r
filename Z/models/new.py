@@ -165,14 +165,14 @@ def get_prediction(model_name, device, intrinsics, IMAGES, image_name, visualize
     if (len(points1) < 5) or (len(points2) < 5):
         return ""
 
-    #TODO: normalize and use both intrinsics, also adjust threshold!!!
+    #TO DO: normalize and use both intrinsics, also adjust threshold!!!
 
     if False:    
         # Compute the Essential Matrix
-        #WIP: replace with poselib
+        #WI P: replace with poselib
         E, mask = cv2.findEssentialMat(points1, points2, cameraMatrix=K1, method=cv2.USAC_MAGSAC, prob=0.999, threshold=1.0)
         # Recover the pose from the Essential Matrix
-        #WIP: replace with poselib
+        #WI P: replace with poselib
         _, R, t, mask_pose = cv2.recoverPose(E, points1, points2, cameraMatrix=K1)
 
     else:

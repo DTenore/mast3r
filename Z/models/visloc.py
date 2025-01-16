@@ -1,5 +1,5 @@
-# TODO: investigate why some images are not processed by Visloc
-# TODO: add fine part for coarse to fine
+# TO DO: investigate why some images are not processed by Visloc
+# TO DO: add fine part for coarse to fine
 
 #!/usr/bin/env python3
 # --------------------------------------------------------
@@ -66,7 +66,7 @@ def coarse_matching(query_view, map_view, model, device, pixel_tol, fast_nn_para
     matches_im_map, matches_im_query = fast_reciprocal_NNs(
         PM, PQ, subsample_or_initxy1=8, **fast_nn_params)
 
-    #FIXME: this doesnt seem much better...
+    #FIX ME: this doesnt seem much better...
     corres = extract_correspondences_nonsym(desc_list[0], desc_list[1], conf_list[0], conf_list[1])
 
 
