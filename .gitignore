@@ -132,6 +132,7 @@ dmypy.json
 asmk/
 checkpoints/
 dust3r/
+data/
 
 # Images
 ZZimages/
