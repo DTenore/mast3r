@@ -5,8 +5,6 @@ import tqdm
 import zipfile
 from datetime import datetime
 from pathlib import Path
-import torch
-from transformers import AutoImageProcessor
 
 # Adjust system path
 Z_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -17,9 +15,8 @@ if Z_PATH not in sys.path:
 from utils import path_to_dust3r_and_mast3r
 from utils.file_io import write_prediction, load_intrinsics
 
-from mast3r.model import AsymmetricMASt3R
-
 import importlib
+
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -28,15 +25,14 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 # Parameters
 device = 'cuda'
-
+model_name = "/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
+#model_name = "/home/dario/_MINE/mast3r/checkpoints/mast3r_demo_mid_real/checkpoint-final.pth"
 output_file = os.path.join(os.path.dirname(__file__), "pose_s00460.txt")
 folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/"
 image_0 = "seq0/frame_00000.jpg"
 
-MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
-#MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/mast3r_demo_mid_real/checkpoint-final.pth"
-POSE_ESTIMATION_MODEL = "baseline_a_dino"
-SIZE = "S"
+MODEL = "baseline_a"
+SIZE = "M"
 
 scenes = {}
 scenes["S"] = ["s00465"]
@@ -58,7 +54,7 @@ def get_prediction_function(model_name):
     
     try:
         # Dynamically import the model's module
-        module = importlib.import_module(f"models.{model_name}")
+        module = importlib.import_module(f"OLD_models.{model_name}")
         # Retrieve the `get_prediction` function from the module
         return getattr(module, "get_prediction")
     except ModuleNotFoundError:
@@ -66,21 +62,12 @@ def get_prediction_function(model_name):
 
 
 def main():
-    get_prediction = get_prediction_function(POSE_ESTIMATION_MODEL)
+    get_prediction = get_prediction_function(MODEL)
 
     # Create temporary folder for submission
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    temp_dir = Path(__file__).parent / f"_tmp/submission-{POSE_ESTIMATION_MODEL}-{timestamp}"
+    temp_dir = Path(__file__).parent / f"_tmp/submission-{MODEL}-{timestamp}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-
-    mast3r_model = AsymmetricMASt3R.from_pretrained(MAST3R_MODEL, verbose=False).to(device)
-    if "dino" in POSE_ESTIMATION_MODEL:
-        processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
-        dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
-        dino_model.eval()  # Set the model to evaluation mode
-        dino_args = {'model': dino_model, 'processor': processor}
-    else:
-        dino_args = None
 
     # Top-level progress bar for all scenes
     with tqdm.tqdm(SCENES, desc="Processing scenes", file=sys.stdout) as scene_pbar:
@@ -119,8 +106,7 @@ def main():
                         visualization = VISUALIZE and ((i/5) % VISUALIZE_INTERVAL == 0)
 
                         # Get prediction and write to output file
-                        prediction = get_prediction(mast3r_model, device, intrinsics, images, image_i, 
-                          visualize=visualization, dino_args=dino_args)
+                        prediction = get_prediction(model_name, device, intrinsics, images, image_i, visualize=visualization)
                         if(prediction):
                             scene_file.write(prediction + '\n')
                         
@@ -133,7 +119,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Zip the temporary folder and save to the predefined location
-    zip_file_path = output_dir / f"{timestamp}-{POSE_ESTIMATION_MODEL}-{SIZE}.zip"
+    zip_file_path = output_dir / f"{timestamp}-{MODEL}-{SIZE}.zip"
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file in temp_dir.glob('*'):
             zipf.write(file, arcname=file.name)

@@ -38,6 +38,10 @@ import matplotlib.pyplot as plt
 def get_dino_patch_grids(device, processor, dino_model, images, heights, widths): 
     # TODO: add batches?
 
+    # Load the DINOv2 model
+    dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
+    dino_model.eval()  # Set the model to evaluation mode
+
     # Define image preprocessing
     preprocess = transforms.Compose([
         transforms.ToTensor(),
@@ -150,8 +154,9 @@ def get_similarity(patches, match0, match1, H0, W0, H1, W1):
 def printer(q, t):
     return f"{q[0]} {q[1]} {q[2]} {q[3]} {t[0][0]} {t[1][0]} {t[2][0]}"
 
-def get_prediction(model, device, intrinsics, IMAGES, image_name, visualize=False, dino_args=None): 
+def get_prediction(model_name, device, intrinsics, IMAGES, image_name, visualize=False): 
 
+    model = AsymmetricMASt3R.from_pretrained(model_name).to(device)
     images = load_images(IMAGES, size=512, verbose=False)
     output = inference([tuple(images)], model, device, batch_size=1, verbose=False)
 
@@ -182,12 +187,16 @@ def get_prediction(model, device, intrinsics, IMAGES, image_name, visualize=Fals
     valid_matches = valid_matches_im0 & valid_matches_im1
     matches_im0, matches_im1 = matches_im0[valid_matches], matches_im1[valid_matches]
     
-    # Use the passed dino model and processor
-    dino_model = dino_args['model']
-    processor = dino_args['processor']
-    
-    # Get DINO patch grids 
-    dino_grids = get_dino_patch_grids(device, processor, dino_model, IMAGES, [H0, H1], [W0, W1])
+    # DO DINO
+
+    # Initialize processor and model
+    processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
+    dino_model = Dinov2Model.from_pretrained('facebook/dinov2-base')
+    dino_model.eval()  # Set model to evaluation mode
+    dino_model.to(device)
+
+    # Get DINO patch grids
+    dino_grids = get_dino_patch_grids(device, processor, dino_model, IMAGES, [H0, H1], [W0, W1]) 
     # For each match calculate the cosine similarity using corresponding DINO features
     cosine_similarities = get_similarity(dino_grids, matches_im0, matches_im1, H0, W0, H1, W1)
     # Thershold cosine similarities 
