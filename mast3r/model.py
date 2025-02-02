@@ -202,6 +202,65 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         return adj_1_to_2, mask_1_to_2, adj_2_to_1, mask_2_to_1
 
+    def _plot_mask(self, mask1, mask2, x, y):
+        """
+        Plots the masks of pixel at coordinates x, y side by side.
+        
+        Args:
+            mask1: torch tensor of shape (768, 768) on cuda device
+            mask2: torch tensor of shape (768, 768) on cuda device
+            x: x-coordinate of the pixel
+            y: y-coordinate of the pixel
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Move tensors to CPU and convert to numpy
+        mask1 = mask1.cpu().numpy()
+        mask2 = mask2.cpu().numpy()
+        
+        # Extract the rows corresponding to the pixel
+        pixel_idx = x * 32 + y
+        mask_row1 = mask1[pixel_idx]
+        mask_row2 = mask2[pixel_idx]
+        
+        # Reshape both to 32x24
+        mask_vis1 = mask_row1.reshape(32, 24)
+        mask_vis2 = mask_row2.reshape(32, 24)
+        
+        # Scale up the visualizations
+        mask_vis1 = np.repeat(np.repeat(mask_vis1, 10, axis=0), 10, axis=1)
+        mask_vis2 = np.repeat(np.repeat(mask_vis2, 10, axis=1), 10, axis=0)
+        
+        # Create figure and subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+        
+        # Plot with a purple-red-orange colormap
+        cmap = plt.get_cmap('plasma')
+        
+        # Plot both masks
+        im1 = ax1.imshow(mask_vis1, cmap=cmap)
+        im2 = ax2.imshow(mask_vis2, cmap=cmap)
+        
+        # Add colorbars
+        plt.colorbar(im1, ax=ax1, label='Similarity Score 1')
+        plt.colorbar(im2, ax=ax2, label='Similarity Score 2')
+        
+        # Add titles and labels
+        ax1.set_title(f'Mask 1 at Pixel ({x}, {y})')
+        ax2.set_title(f'Mask 2 at Pixel ({x}, {y})')
+        ax1.set_xlabel('Width (scaled)')
+        ax1.set_ylabel('Height (scaled)')
+        ax2.set_xlabel('Width (scaled)')
+        ax2.set_ylabel('Height (scaled)')
+        
+        # Adjust layout to prevent overlap
+        plt.tight_layout()
+        
+        # Show the plot
+        plt.show()
+
+
     # WIP: Accept masks and pass them to the blocks
     def _decoder(self, f1, pos1, mask_1_to_2, f2, pos2, mask_2_to_1):
         final_output = [(f1, f2)]  # before projection
@@ -238,6 +297,8 @@ class DinoMASt3R(AsymmetricMASt3R):
         # Get adjacency distances and masks (keep top 50% of neighbors)
         dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1 = self._create_adjacency_graphs(dino_feat1, dino_feat2, top_k=0.5)
         
+        #self._plot_mask(dist_1_to_2, dist_2_to_1, 0, 0)
+
         # WIP: pass distances to decoder
         # combine all ref images into object-centric representation
         dec1, dec2 = self._decoder(feat1, pos1, mask_1_to_2, feat2, pos2, mask_2_to_1)

@@ -28,17 +28,15 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 # Parameters
 device = 'cuda'
-
-output_file = os.path.join(os.path.dirname(__file__), "pose_s00460.txt")
 folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/"
 image_0 = "seq0/frame_00000.jpg"
 
 MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
 #MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/mast3r_demo_mid_real/checkpoint-final.pth"
 POSE_ESTIMATION_MODEL = "baseline_a"
-SIZE = "M"
-MODEL = "MASt3R"
-#MODEL = "DinoMASt3R"
+SIZE = "S"
+#MODEL = "MASt3R"
+MODEL = "DinoMASt3R"
 
 scenes = {}
 scenes["S"] = ["s00495"]

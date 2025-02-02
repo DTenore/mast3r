@@ -72,7 +72,7 @@ def get_dino_patch_grids(device, processor, dino_model, images, heights, widths)
 
         results.append(patch_features_grid)
 
-    if False:
+    if True:
         plt.figure(figsize=(16, 8))
         for idx, (image_path, patch_features_grid) in enumerate(zip(images, results)):
             # Flatten patch features
@@ -106,7 +106,7 @@ def get_dino_patch_grids(device, processor, dino_model, images, heights, widths)
 
             # Display side-by-side images
             plt.subplot(1, len(images), idx + 1)
-            plt.imshow(Image.blend(original_image_resized, pca_overlay, alpha=0.5))
+            plt.imshow(Image.blend(original_image_resized, pca_overlay, alpha=0.75))
             plt.title(f"Image {idx + 1} with PCA Overlay")
             plt.axis('off')
 
