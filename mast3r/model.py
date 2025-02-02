@@ -229,8 +229,8 @@ class DinoMASt3R(AsymmetricMASt3R):
         mask_vis2 = mask_row2.reshape(32, 24)
         
         # Scale up the visualizations
-        mask_vis1 = np.repeat(np.repeat(mask_vis1, 10, axis=0), 10, axis=1)
-        mask_vis2 = np.repeat(np.repeat(mask_vis2, 10, axis=1), 10, axis=0)
+        mask_vis1 = np.repeat(np.repeat(mask_vis1, 14, axis=0), 14, axis=1)
+        mask_vis2 = np.repeat(np.repeat(mask_vis2, 14, axis=1), 14, axis=0)
         
         # Create figure and subplots
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
@@ -310,5 +310,3 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         res2['pts3d_in_other_view'] = res2.pop('pts3d')  # predict view2's pts3d in view1's frame
         return res1, res2
-
-# FIXME: even with top 100% of neighbors, the model is not able to predict the correct 3D points, lets check step by step and compare values (use tester)
