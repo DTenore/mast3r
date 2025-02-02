@@ -17,7 +17,7 @@ if Z_PATH not in sys.path:
 from utils import path_to_dust3r_and_mast3r
 from utils.file_io import write_prediction, load_intrinsics
 
-from mast3r.model import AsymmetricMASt3R
+from mast3r.model import AsymmetricMASt3R, DinoMASt3R
 
 import importlib
 
@@ -35,11 +35,13 @@ image_0 = "seq0/frame_00000.jpg"
 
 MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
 #MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/mast3r_demo_mid_real/checkpoint-final.pth"
-POSE_ESTIMATION_MODEL = "baseline_a_dino"
-SIZE = "S"
+POSE_ESTIMATION_MODEL = "baseline_a"
+SIZE = "M"
+MODEL = "MASt3R"
+#MODEL = "DinoMASt3R"
 
 scenes = {}
-scenes["S"] = ["s00465"]
+scenes["S"] = ["s00495"]
 scenes["M"] = ["s00465", "s00475", "s00485", "s00495"]
 scenes["L"] = [f"s{i:05d}" for i in range(460, 525, 5)]
 scenes["XL"] = [f"s{i:05d}" for i in range(460, 525, 1)]
@@ -72,8 +74,7 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     temp_dir = Path(__file__).parent / f"_tmp/submission-{POSE_ESTIMATION_MODEL}-{timestamp}"
     temp_dir.mkdir(parents=True, exist_ok=True)
-
-    mast3r_model = AsymmetricMASt3R.from_pretrained(MAST3R_MODEL, verbose=False).to(device)
+    
     if "dino" in POSE_ESTIMATION_MODEL:
         processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
         dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
@@ -81,6 +82,20 @@ def main():
         dino_args = {'model': dino_model, 'processor': processor}
     else:
         dino_args = None
+
+    if MODEL == "MASt3R":
+        mast3r_model = AsymmetricMASt3R.from_pretrained(MAST3R_MODEL, verbose=False).to(device)
+    else:
+        dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
+        dino_model.eval()  # Set the model to evaluation mode
+        dino_model.to(device)  # Move the model to the device
+        
+        # Create DinoMASt3R instance with the pretrained model's parameters
+        mast3r_model = DinoMASt3R.from_pretrained(
+            "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric",
+            dino_model=dino_model
+            
+        ).to(device)
 
     # Top-level progress bar for all scenes
     with tqdm.tqdm(SCENES, desc="Processing scenes", file=sys.stdout) as scene_pbar:
@@ -133,7 +148,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Zip the temporary folder and save to the predefined location
-    zip_file_path = output_dir / f"{timestamp}-{POSE_ESTIMATION_MODEL}-{SIZE}.zip"
+    zip_file_path = output_dir / f"{timestamp}-{POSE_ESTIMATION_MODEL}-{SIZE}-{MODEL}.zip"
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file in temp_dir.glob('*'):
             zipf.write(file, arcname=file.name)

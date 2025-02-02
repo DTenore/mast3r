@@ -15,9 +15,6 @@ from mast3r.fast_nn import fast_reciprocal_NNs
 
 from dust3r.inference import inference
 
-import cv2
-import tqdm
-
 from transforms3d.quaternions import mat2quat
 
 from utils.utils import scale_intrinsics, visualize_all_features

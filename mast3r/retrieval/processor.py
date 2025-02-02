@@ -67,7 +67,7 @@ class Retriever(object):
         # load the model
         assert os.path.isfile(modelname), modelname
         print(f'Loading retrieval model from {modelname}')
-        ckpt = torch.load(modelname, 'cpu')  # TODO from pretrained to download it automatically
+        ckpt = torch.load(modelname, 'cpu')  # TOdDO from pretrained to download it automatically
         ckpt_args = ckpt['args']
         if backbone is None:
             backbone = AsymmetricMASt3R.from_pretrained(ckpt_args.pretrained)
@@ -84,7 +84,7 @@ class Retriever(object):
         self.imsize = ckpt_args.imsize
 
         # load the asmk codebook
-        dname, bname = os.path.split(modelname)  # TODO they should both be in the same file ?
+        dname, bname = os.path.split(modelname)  # TODdO they should both be in the same file ?
         bname_splits = bname.split('_')
         cache_codebook_fname = os.path.join(dname, '_'.join(bname_splits[:-1]) + '_codebook.pkl')
         assert os.path.isfile(cache_codebook_fname), cache_codebook_fname

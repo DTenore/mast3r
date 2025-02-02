@@ -158,7 +158,7 @@ see https://github.com/naver/dust3r?tab=readme-ov-file#interactive-demo for deta
 
 ### Interactive demo with docker
 
-TODO update with asmk/retrieval model
+TODdO update with asmk/retrieval model
 
 To run MASt3R using Docker, including with NVIDIA CUDA support, follow these instructions:
 

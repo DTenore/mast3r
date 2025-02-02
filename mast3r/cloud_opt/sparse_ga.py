@@ -646,7 +646,7 @@ def extract_correspondences(feats, qonfs, subsample=8, device=None, ptmap_key='p
     idx2 = []
     qonf1 = []
     qonf2 = []
-    # TODO add non symmetric / pixel_tol options
+    # TODdO add non symmetric / pixel_tol options
     for A, B, QA, QB in [(feat11, feat21, qonf11.cpu(), qonf21.cpu()),
                          (feat12, feat22, qonf12.cpu(), qonf22.cpu())]:
         nn1to2 = fast_reciprocal_NNs(A, B, subsample_or_initxy1=subsample, ret_xy=False, **opt)
