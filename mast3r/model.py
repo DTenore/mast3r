@@ -26,7 +26,9 @@ from copy import deepcopy
 
 import dust3r.utils.path_to_croco  # noqa: F401
 from models.croco import CroCoNet  # noqa
-from models.blocks import DinoDecoderBlock, DecoderBlock
+from models.blocks import Attention, DropPath, Mlp
+
+import torch.nn as nn 
 
 
 inf = float('inf')
@@ -182,8 +184,6 @@ class DinoMASt3R(AsymmetricMASt3R):
         k1 = int(similarity_matrix.shape[0] * top_k)
         k2 = int(similarity_matrix.shape[1] * top_k)
 
-        # WIP: maybe in the future will have to change to boolens for the mask
-
         # Select top-K neighbors for 1 → 2
         topk_values_1, topk_indices_1 = torch.topk(similarity_matrix, k1, dim=1)
         adj_1_to_2 = torch.full_like(similarity_matrix, -float("inf"))
@@ -260,8 +260,6 @@ class DinoMASt3R(AsymmetricMASt3R):
         # Show the plot
         plt.show()
 
-
-    # WIP: Accept masks and pass them to the blocks
     def _decoder(self, f1, pos1, mask_1_to_2, f2, pos2, mask_2_to_1):
         final_output = [(f1, f2)]  # before projection
 
@@ -299,7 +297,6 @@ class DinoMASt3R(AsymmetricMASt3R):
         
         #self._plot_mask(dist_1_to_2, dist_2_to_1, 0, 0)
 
-        # WIP: pass distances to decoder
         # combine all ref images into object-centric representation
         dec1, dec2 = self._decoder(feat1, pos1, mask_1_to_2, feat2, pos2, mask_2_to_1)
         #dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2)
@@ -310,3 +307,68 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         res2['pts3d_in_other_view'] = res2.pop('pts3d')  # predict view2's pts3d in view1's frame
         return res1, res2
+
+class DinoDecoderBlock(nn.Module):
+
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, norm_mem=True, rope=None):
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = Attention(dim, rope=rope, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.cross_attn = SparseCrossAttention(dim, rope=rope, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.norm2 = norm_layer(dim)
+        self.norm3 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.norm_y = norm_layer(dim)
+
+    def forward(self, x, y, xpos, ypos, mask):
+        x = x + self.attn(self.norm1(x), xpos)
+        y_ = self.norm_y(y)
+        x = x + self.cross_attn(self.norm2(x), y_, y_, xpos, ypos, mask)
+        x = x + self.mlp(self.norm3(x))
+        return x, y
+
+class SparseCrossAttention(nn.Module):
+    
+    def __init__(self, dim, rope=None, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim ** -0.5
+
+        self.projq = nn.Linear(dim, dim, bias=qkv_bias)
+        self.projk = nn.Linear(dim, dim, bias=qkv_bias)
+        self.projv = nn.Linear(dim, dim, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+        
+        self.rope = rope
+
+    def forward(self, query, key, value, qpos, kpos, mask):
+        B, Nq, C = query.shape
+        Nk = key.shape[1]
+        Nv = value.shape[1]
+        
+        q = self.projq(query).reshape(B,Nq,self.num_heads, C// self.num_heads).permute(0, 2, 1, 3)
+        k = self.projk(key).reshape(B,Nk,self.num_heads, C// self.num_heads).permute(0, 2, 1, 3)
+        v = self.projv(value).reshape(B,Nv,self.num_heads, C// self.num_heads).permute(0, 2, 1, 3)
+        
+        if self.rope is not None:
+            q = self.rope(q, qpos)
+            k = self.rope(k, kpos)
+            
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+
+        # Use mask to set false values to -inf
+        expanded_mask = mask.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, -1, -1)        
+        attn = attn.masked_fill(~expanded_mask, float('-inf'))
+
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        
+        x = (attn @ v).transpose(1, 2).reshape(B, Nq, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x

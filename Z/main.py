@@ -23,6 +23,7 @@ import importlib
 
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 # This can suppress all errors -> not recommended for now
 #sys.stderr = open(os.devnull, 'w')
 
