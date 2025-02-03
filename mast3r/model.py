@@ -179,7 +179,7 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         # Create distance matrix
         similarity_matrix = torch.matmul(features1_flat, features2_flat.T)  # (768, 768)
-
+        
         # Get top-k by mutliplying values per row times percentage
         k1 = int(similarity_matrix.shape[0] * top_k)
         k2 = int(similarity_matrix.shape[1] * top_k)
@@ -293,7 +293,7 @@ class DinoMASt3R(AsymmetricMASt3R):
         dino_feat2 = self._reshape_dino_features(dino_feat2)
 
         # Get adjacency distances and masks (keep top 50% of neighbors)
-        dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1 = self._create_adjacency_graphs(dino_feat1, dino_feat2, top_k=0.5)
+        dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1 = self._create_adjacency_graphs(dino_feat1, dino_feat2, top_k=0.75)
         
         #self._plot_mask(dist_1_to_2, dist_2_to_1, 0, 0)
 

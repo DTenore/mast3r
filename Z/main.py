@@ -35,7 +35,7 @@ image_0 = "seq0/frame_00000.jpg"
 MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
 #MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/mast3r_demo_mid_real/checkpoint-final.pth"
 POSE_ESTIMATION_MODEL = "baseline_a"
-SIZE = "S"
+SIZE = "XL"
 #MODEL = "MASt3R"
 MODEL = "DinoMASt3R"
 
