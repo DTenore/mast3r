@@ -88,18 +88,22 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 # --------------------------------------------------------
 
 class DinoMASt3R(AsymmetricMASt3R):
-    def __init__(self, dino_model, **kwargs):
+    def __init__(self, dino_model=None, **kwargs):
         super().__init__(**kwargs)
 
-        self.dino_model = dino_model
+        if dino_model is not None:
+            self.dino_model = dino_model
+        else:
+            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
+            dino_model.eval()  # Set the model to evaluation mode
+            self.dino_model = dino_model
 
-        if True:
-            self.dec_blocks = nn.ModuleList([
-                # NOTE: dec_depth = 12, which is equal to number of heads??? i.e., num_heads=12???
-                DinoDecoderBlock(self.dec_embed_dim, self.dec_depth, mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), norm_mem=True, rope=self.rope)
-                for i in range(self.dec_depth)])
+        self.dec_blocks = nn.ModuleList([
+            # NOTE: dec_depth = 12, which is equal to number of heads??? i.e., num_heads=12???
+            DinoDecoderBlock(self.dec_embed_dim, self.dec_depth, mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), norm_mem=True, rope=self.rope)
+            for i in range(self.dec_depth)])
 
-            self.dec_blocks2 = deepcopy(self.dec_blocks)
+        self.dec_blocks2 = deepcopy(self.dec_blocks)
 
 
     def _get_dino_features(self, view1, view2):
@@ -113,7 +117,7 @@ class DinoMASt3R(AsymmetricMASt3R):
         ])
 
         results = []
-        for img, h, w in [(view1['img'], H1, W1), (view2['img'], H2, W2)]:
+        for img, h, w in [(view1['img'][0], H1, W1), (view2['img'][0], H2, W2)]:
             # Ensure dimensions are multiples of patch size
             new_width = (w // 14) * 14  
             new_height = (h // 14) * 14
