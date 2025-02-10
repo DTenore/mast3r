@@ -33,7 +33,6 @@ def test_dino_mast3r():
     model = DinoMASt3R.from_pretrained(
         "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric",
         dino_model=dino_model
-        
     ).to(device)
 
     # Load test images 

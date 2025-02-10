@@ -88,7 +88,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 # --------------------------------------------------------
 
 class DinoMASt3R(AsymmetricMASt3R):
-    def __init__(self, dino_model=None, **kwargs):
+    def __init__(self, dino_model=None, top_k=0.75, **kwargs):
         super().__init__(**kwargs)
 
         if dino_model is not None:
@@ -104,6 +104,8 @@ class DinoMASt3R(AsymmetricMASt3R):
             for i in range(self.dec_depth)])
 
         self.dec_blocks2 = deepcopy(self.dec_blocks)
+
+        self.top_k = top_k
 
 
     def _get_dino_features(self, view1, view2):
@@ -174,7 +176,7 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         return pooled
 
-    def _create_adjacency_graphs(self, features1, features2, top_k=0.5):
+    def _create_adjacency_graphs(self, features1, features2, top_k):
         
 
         # Flatten spatial dimensions (32, 24, 384) → (768, 384)
@@ -297,7 +299,7 @@ class DinoMASt3R(AsymmetricMASt3R):
         dino_feat2 = self._reshape_dino_features(dino_feat2)
 
         # Get adjacency distances and masks (keep top 50% of neighbors)
-        dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1 = self._create_adjacency_graphs(dino_feat1, dino_feat2, top_k=0.75)
+        dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1 = self._create_adjacency_graphs(dino_feat1, dino_feat2, self.top_k)
         
         #self._plot_mask(dist_1_to_2, dist_2_to_1, 0, 0)
 
