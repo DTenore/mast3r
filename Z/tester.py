@@ -37,8 +37,8 @@ def test_dino_mast3r():
 
     # Load test images 
     test_images = load_images([
-        '/home/dario/_MINE/mast3r/ZZmaster_input/frame_00000.jpg',
-        '/home/dario/_MINE/mast3r/ZZmaster_input/frame_00005.jpg'
+        '/home/dario/DATASETS/map-free-reloc/data/mapfree/val/s00465/seq0/frame_00000.jpg',
+        '/home/dario/DATASETS/map-free-reloc/data/mapfree/val/s00465/seq1/frame_00000.jpg',
     ], size=512)
 
     # Run inference

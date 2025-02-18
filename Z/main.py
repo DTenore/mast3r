@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 import tqdm
@@ -29,25 +30,37 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 # Parameters
 device = 'cuda'
-folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/val/"
+data_folder = "/home/dario/DATASETS/map-free-reloc/data/mapfree/"
+zip_output_path = "/home/dario/_MINE/mast3r/Z/_submissions"
 image_0 = "seq0/frame_00000.jpg"
 
-MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth"
-#MAST3R_MODEL = "/home/dario/_MINE/mast3r/checkpoints/mast3r_demo_mid_real/checkpoint-final.pth"
 POSE_ESTIMATION_MODEL = "baseline_a"
-SIZE = "XL"
+SET = "val"
+SIZE = "L"
 #MODEL = "MASt3R"
 MODEL = "DinoMASt3R"
+TOP_K = 0.75
+
+
+def get_folder_range(directory):
+    # List all subfolders in the directory
+    subfolders = [name for name in os.listdir(directory) if os.path.isdir(os.path.join(directory, name))]
+    
+    # Extract numbers using regex (assuming folder names are in the format 'sXXXXX')
+    numbers = [int(re.search(r"s(\d+)", folder).group(1)) for folder in subfolders if re.search(r"s(\d+)", folder)]
+    
+    return min(numbers), max(numbers) 
+
+folder = os.path.join(data_folder, SET)
+start, end = get_folder_range(folder)
 
 scenes = {}
 scenes["S"] = ["s00495"]
 scenes["M"] = ["s00465", "s00475", "s00485", "s00495"]
-scenes["L"] = [f"s{i:05d}" for i in range(460, 525, 5)]
-scenes["XL"] = [f"s{i:05d}" for i in range(460, 525, 1)]
+scenes["L"] = [f"s{i:05d}" for i in range(start, end + 1, 5)]
+scenes["XL"] = [f"s{i:05d}" for i in range(start, end + 1, 1)]
 
 SCENES = scenes[SIZE]
-
-ZIP_OUTPUT_PATH = "/home/dario/_MINE/mast3r/Z/_submissions"
 
 START = 0
 VISUALIZE = False
@@ -83,21 +96,28 @@ def main():
         dino_args = None
 
     if MODEL == "MASt3R":
-        mast3r_model = AsymmetricMASt3R.from_pretrained(MAST3R_MODEL, verbose=False).to(device)
+        mast3r_model = AsymmetricMASt3R.from_pretrained("/home/dario/_MINE/mast3r/checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth", verbose=False).to(device)
+        model_name = "MASt3R"
     else:
         dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
         dino_model.eval()  # Set the model to evaluation mode
         dino_model.to(device)  # Move the model to the device
-        
+
         # Create DinoMASt3R instance with the pretrained model's parameters
         mast3r_model = DinoMASt3R.from_pretrained(
             "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric",
-            dino_model=dino_model
-            
+            dino_model=dino_model,
+            top_k=TOP_K
         ).to(device)
 
+        if True:
+            state_dict = torch.load("/home/dario/_MINE/mast3r/Z/checkpoints/finetuned_dinomast3r_20250218-110338.pth", map_location=device)
+            mast3r_model.load_state_dict(state_dict, strict=False)
+
+        model_name = f"DinoMASt3R-Top-{TOP_K}"
+
     # Top-level progress bar for all scenes
-    with tqdm.tqdm(SCENES, desc="Processing scenes", file=sys.stdout) as scene_pbar:
+    with tqdm.tqdm(SCENES, desc="Processing scenes", file=sys.stdout, dynamic_ncols=True) as scene_pbar:
         for SCENE in scene_pbar:
             intrinsics_dict, frame_width, frame_height = load_intrinsics(os.path.join(folder, SCENE, "intrinsics.txt"))
             intrincics_0 = intrinsics_dict[image_0]
@@ -112,7 +132,7 @@ def main():
             # Open file for the current scene
             with scene_file_path.open("w") as scene_file:
                 # Single progress bar for frames within the current scene
-                with tqdm.tqdm(total=(num_frames-START) // 5, desc=f"Processing frames", leave=False, file=sys.stdout) as frame_pbar:
+                with tqdm.tqdm(total=(num_frames-START) // 5, desc=f"Processing frames", leave=False, file=sys.stdout, dynamic_ncols=True) as frame_pbar:
                     # Process images and generate predictions
                     for i in range(START, num_frames, 5):
                         frame_pbar.set_description(f"Processing frame {i:05d}")
@@ -143,11 +163,11 @@ def main():
 
     
     # Ensure the output directory exists
-    output_dir = Path(ZIP_OUTPUT_PATH)
+    output_dir = Path(zip_output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Zip the temporary folder and save to the predefined location
-    zip_file_path = output_dir / f"{timestamp}-{POSE_ESTIMATION_MODEL}-{SIZE}-{MODEL}.zip"
+    zip_file_path = output_dir / f"{timestamp}-{POSE_ESTIMATION_MODEL}-{SIZE}-{MODEL}-{model_name}.zip"
     with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for file in temp_dir.glob('*'):
             zipf.write(file, arcname=file.name)

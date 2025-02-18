@@ -88,7 +88,10 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 # --------------------------------------------------------
 
 class DinoMASt3R(AsymmetricMASt3R):
-    def __init__(self, dino_model=None, top_k=0.75, **kwargs):
+    def __init__(self, dino_model=None, top_k=0.75, 
+                hidden_dim_enc=512,  # hidden dimension for the encoder branch
+                hidden_dim_dec=512,  # hidden dimension for the decoder branch
+                **kwargs):
         super().__init__(**kwargs)
 
         if dino_model is not None:
@@ -107,6 +110,8 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         self.top_k = top_k
 
+        # WIP:
+        self.alpha = nn.Parameter(torch.tensor(1.0))
 
     def _get_dino_features(self, view1, view2):
         """Extract DINO features and upsample to original resolution."""
@@ -177,15 +182,13 @@ class DinoMASt3R(AsymmetricMASt3R):
         return pooled
 
     def _create_adjacency_graphs(self, features1, features2, top_k):
-        
-
         # Flatten spatial dimensions (32, 24, 384) → (768, 384)
         features1_flat = features1.reshape(features1.shape[0] * features1.shape[1], features1.shape[2])  # (768, 384)
         features2_flat = features2.reshape(features2.shape[0] * features2.shape[1], features2.shape[2])  # (768, 384)
 
         # Create distance matrix
         similarity_matrix = torch.matmul(features1_flat, features2_flat.T)  # (768, 768)
-        
+
         # Get top-k by mutliplying values per row times percentage
         k1 = int(similarity_matrix.shape[0] * top_k)
         k2 = int(similarity_matrix.shape[1] * top_k)
@@ -195,78 +198,134 @@ class DinoMASt3R(AsymmetricMASt3R):
         adj_1_to_2 = torch.full_like(similarity_matrix, -float("inf"))
         adj_1_to_2.scatter_(1, topk_indices_1, topk_values_1)
 
-        # Create boolean mask for 1 → 2
-        mask_1_to_2 = (adj_1_to_2 != -float("inf"))
-
         # Select top-K neighbors for 2 → 1
         topk_values_2, topk_indices_2 = torch.topk(similarity_matrix.T, k2, dim=1)  # Transpose for 2 → 1
         adj_2_to_1 = torch.full_like(similarity_matrix.T, -float("inf"))
         adj_2_to_1.scatter_(1, topk_indices_2, topk_values_2)
-        
+
+        # Create boolean mask for 1 → 2
+        mask_1_to_2 = (adj_1_to_2 != -float("inf"))
         # Create boolean mask for 2 → 1
         mask_2_to_1 = (adj_2_to_1 != -float("inf"))
 
-        return adj_1_to_2, mask_1_to_2, adj_2_to_1, mask_2_to_1
+        scaled_similarity_matrix = similarity_matrix * self.alpha
 
-    def _plot_mask(self, mask1, mask2, x, y):
+        return adj_1_to_2, mask_1_to_2, adj_2_to_1, mask_2_to_1, scaled_similarity_matrix
+
+    def _plot_mask(self, mask1, mask2, x, y, orig_img1, orig_img2):
         """
-        Plots the masks of pixel at coordinates x, y side by side.
+        Plots four panels arranged as follows:
+        Row 1: Left - Processed Image 1 (denormalized to [0,1] and resized),
+                Right - Mask from Image 1 to Image 2 with the selected patch highlighted.
+        Row 2: Left - Processed Image 2 (denormalized and resized),
+                Right - Mask from Image 2 to Image 1 with the selected patch highlighted.
+
+        The images are resized to the same dimensions as the mask visualizations 
+        (i.e., width=24*14=336 and height=32*14=448).
         
         Args:
-            mask1: torch tensor of shape (768, 768) on cuda device
-            mask2: torch tensor of shape (768, 768) on cuda device
-            x: x-coordinate of the pixel
-            y: y-coordinate of the pixel
+            mask1: torch tensor of shape (768, 768) on CUDA (mask for Image 1 → Image 2).
+            mask2: torch tensor of shape (768, 768) on CUDA (mask for Image 2 → Image 1).
+            x: row index (in the 32×24 grid) of the selected patch.
+            y: column index (in the 32×24 grid) of the selected patch.
+            orig_img1: original image 1 as a torch tensor in (H, W, 3) with values in [–1,1].
+            orig_img2: original image 2 as a torch tensor in (H, W, 3) with values in [–1,1].
         """
         import matplotlib.pyplot as plt
         import numpy as np
-        
-        # Move tensors to CPU and convert to numpy
+        from matplotlib.patches import Rectangle
+        from torchvision import transforms
+        from PIL import Image
+
+        # Helper: Denormalize and resize image to mask size (336, 448)
+        def process_orig_image(img_tensor, target_size=(336, 448)):
+            # If values are in [-1,1], map them to [0,1]
+            if img_tensor.min() < 0:
+                img_tensor = (img_tensor + 1) / 2
+            img_tensor = torch.clamp(img_tensor, 0, 1)
+            # Ensure shape is (C, H, W) for ToPILImage (input is (H, W, 3))
+            if img_tensor.ndimension() == 3 and img_tensor.shape[-1] == 3:
+                img_tensor = img_tensor.permute(2, 0, 1)
+            pil_img = transforms.ToPILImage()(img_tensor)
+            pil_img = pil_img.resize(target_size, Image.LANCZOS)
+            return np.array(pil_img)
+
+        # Process the original images.
+        proc_img1 = process_orig_image(orig_img1)
+        proc_img2 = process_orig_image(orig_img2)
+
+        # Process masks: move to CPU and convert to numpy.
         mask1 = mask1.cpu().numpy()
         mask2 = mask2.cpu().numpy()
-        
-        # Extract the rows corresponding to the pixel
-        pixel_idx = x * 32 + y
+
+        # Compute the patch index for a grid of 32 rows x 24 columns.
+        pixel_idx = x * 24 + y
+
+        # Extract the corresponding row and reshape to (32, 24).
         mask_row1 = mask1[pixel_idx]
         mask_row2 = mask2[pixel_idx]
-        
-        # Reshape both to 32x24
         mask_vis1 = mask_row1.reshape(32, 24)
         mask_vis2 = mask_row2.reshape(32, 24)
-        
-        # Scale up the visualizations
-        mask_vis1 = np.repeat(np.repeat(mask_vis1, 14, axis=0), 14, axis=1)
-        mask_vis2 = np.repeat(np.repeat(mask_vis2, 14, axis=1), 14, axis=0)
-        
-        # Create figure and subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-        
-        # Plot with a purple-red-orange colormap
-        cmap = plt.get_cmap('plasma')
-        
-        # Plot both masks
-        im1 = ax1.imshow(mask_vis1, cmap=cmap)
-        im2 = ax2.imshow(mask_vis2, cmap=cmap)
-        
-        # Add colorbars
-        plt.colorbar(im1, ax=ax1, label='Similarity Score 1')
-        plt.colorbar(im2, ax=ax2, label='Similarity Score 2')
-        
-        # Add titles and labels
-        ax1.set_title(f'Mask 1 at Pixel ({x}, {y})')
-        ax2.set_title(f'Mask 2 at Pixel ({x}, {y})')
-        ax1.set_xlabel('Width (scaled)')
-        ax1.set_ylabel('Height (scaled)')
-        ax2.set_xlabel('Width (scaled)')
-        ax2.set_ylabel('Height (scaled)')
-        
-        # Adjust layout to prevent overlap
+
+        # Scale up the mask visualization so that each patch becomes 14x14 pixels.
+        patch_scale = 14
+        mask_vis1 = np.repeat(np.repeat(mask_vis1, patch_scale, axis=0), patch_scale, axis=1)
+        mask_vis2 = np.repeat(np.repeat(mask_vis2, patch_scale, axis=0), patch_scale, axis=1)
+
+        # Define the rectangle parameters for the patch highlight.
+        top_left = (y * patch_scale, x * patch_scale)
+        patch_size = patch_scale
+
+        # Create a 2x2 subplot layout:
+        # Row 1: Left - Processed Image 1, Right - Mask from Image 1 → Image 2.
+        # Row 2: Left - Processed Image 2, Right - Mask from Image 2 → Image 1.
+        fig, axs = plt.subplots(2, 2, figsize=(20, 16))
+
+        # Row 1, Column 1: Processed Original Image 1.
+        axs[0, 0].imshow(proc_img1)
+        axs[0, 0].set_title("Image 1")
+        rect_img1 = Rectangle(top_left, patch_size, patch_size, linewidth=2,
+                            edgecolor='white', facecolor='none')
+        axs[0, 0].add_patch(rect_img1)
+        axs[0, 0].set_xlabel("Width")
+        axs[0, 0].set_ylabel("Height")
+
+        # Row 1, Column 2: Mask from Image 1 to Image 2.
+        im1 = axs[0, 1].imshow(mask_vis1, cmap='plasma')
+        axs[0, 1].set_title(f"Mask from Image 1 to Image 2 (patch ({x}, {y})")
+        rect_mask1 = Rectangle(top_left, patch_size, patch_size, linewidth=2,
+                            edgecolor='white', facecolor='none')
+        axs[0, 1].add_patch(rect_mask1)
+        axs[0, 1].set_xlabel("Width (scaled)")
+        axs[0, 1].set_ylabel("Height (scaled)")
+        plt.colorbar(im1, ax=axs[0, 1], label='Similarity Score')
+
+        # Row 2, Column 1: Processed Original Image 2.
+        axs[1, 0].imshow(proc_img2)
+        axs[1, 0].set_title("Image 2")
+        rect_img2 = Rectangle(top_left, patch_size, patch_size, linewidth=2,
+                            edgecolor='white', facecolor='none')
+        axs[1, 0].add_patch(rect_img2)
+        axs[1, 0].set_xlabel("Width")
+        axs[1, 0].set_ylabel("Height")
+
+        # Row 2, Column 2: Mask from Image 2 to Image 1.
+        im2 = axs[1, 1].imshow(mask_vis2, cmap='plasma')
+        axs[1, 1].set_title(f"Mask from Image 2 to Image 1 (patch ({x}, {y})")
+        rect_mask2 = Rectangle(top_left, patch_size, patch_size, linewidth=2,
+                            edgecolor='white', facecolor='none')
+        axs[1, 1].add_patch(rect_mask2)
+        axs[1, 1].set_xlabel("Width (scaled)")
+        axs[1, 1].set_ylabel("Height (scaled)")
+        plt.colorbar(im2, ax=axs[1, 1], label='Similarity Score')
+
         plt.tight_layout()
-        
-        # Show the plot
         plt.show()
 
-    def _decoder(self, f1, pos1, mask_1_to_2, f2, pos2, mask_2_to_1):
+
+
+    
+    def _decoder(self, f1, pos1, mask_1_to_2, f2, pos2, mask_2_to_1, similarity_matrix=None):
         final_output = [(f1, f2)]  # before projection
 
         # project to decoder dim
@@ -276,9 +335,10 @@ class DinoMASt3R(AsymmetricMASt3R):
         final_output.append((f1, f2))
         for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
             # img1 side
-            f1, _ = blk1(*final_output[-1][::+1], pos1, pos2, mask_1_to_2)
+            f1, _ = blk1(*final_output[-1][::+1], pos1, pos2, mask_1_to_2, similarity_matrix)
             # img2 side
-            f2, _ = blk2(*final_output[-1][::-1], pos2, pos1, mask_2_to_1)
+            
+            f2, _ = blk2(*final_output[-1][::-1], pos2, pos1, mask_2_to_1, similarity_matrix)
             # store the result
             final_output.append((f1, f2))
 
@@ -299,12 +359,16 @@ class DinoMASt3R(AsymmetricMASt3R):
         dino_feat2 = self._reshape_dino_features(dino_feat2)
 
         # Get adjacency distances and masks (keep top 50% of neighbors)
-        dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1 = self._create_adjacency_graphs(dino_feat1, dino_feat2, self.top_k)
+        dist_1_to_2, mask_1_to_2, dist_2_to_1, mask_2_to_1, similarity_matrix = self._create_adjacency_graphs(dino_feat1, dino_feat2, self.top_k)
         
-        #self._plot_mask(dist_1_to_2, dist_2_to_1, 0, 0)
+        # WIP: maybe turn this into parameter
+        if False:
+            for x in [0, 10, 21, 31]:
+                for y in [0, 8, 15, 23]:
+                    self._plot_mask(dist_1_to_2, dist_2_to_1, x, y, view1['img'][0].cpu().permute(1,2, 0), view2['img'][0].cpu().permute(1,2, 0))
 
         # combine all ref images into object-centric representation
-        dec1, dec2 = self._decoder(feat1, pos1, mask_1_to_2, feat2, pos2, mask_2_to_1)
+        dec1, dec2 = self._decoder(feat1, pos1, mask_1_to_2, feat2, pos2, mask_2_to_1, similarity_matrix)
         #dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2)
 
         with torch.amp.autocast('cuda',enabled=False):
@@ -328,10 +392,10 @@ class DinoDecoderBlock(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         self.norm_y = norm_layer(dim)
 
-    def forward(self, x, y, xpos, ypos, mask):
+    def forward(self, x, y, xpos, ypos, mask, similarities):
         x = x + self.attn(self.norm1(x), xpos)
         y_ = self.norm_y(y)
-        x = x + self.cross_attn(self.norm2(x), y_, y_, xpos, ypos, mask)
+        x = x + self.cross_attn(self.norm2(x), y_, y_, xpos, ypos, mask, similarities)
         x = x + self.mlp(self.norm3(x))
         return x, y
 
@@ -352,7 +416,7 @@ class SparseCrossAttention(nn.Module):
         
         self.rope = rope
 
-    def forward(self, query, key, value, qpos, kpos, mask):
+    def forward(self, query, key, value, qpos, kpos, mask, similarities):
         B, Nq, C = query.shape
         Nk = key.shape[1]
         Nv = value.shape[1]
@@ -367,9 +431,19 @@ class SparseCrossAttention(nn.Module):
             
         attn = (q @ k.transpose(-2, -1)) * self.scale
 
-        # Use mask to set false values to -inf
-        expanded_mask = mask.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, -1, -1)        
-        attn = attn.masked_fill(~expanded_mask, float('-inf'))
+        if False:
+            # Use mask to set false values to -inf
+            expanded_mask = mask.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, -1, -1)   
+            #print(f"Max attn: {torch.max(attn).item():.4f}")
+            #print(f"Min attn: {torch.min(attn).item():.4f}")     
+            attn = attn.masked_fill(~expanded_mask, float('-inf'))
+        else:
+            # WIP: make alpha trainable
+
+            attn = attn + similarities
+            expanded_mask = mask.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, -1, -1)   
+            attn = attn.masked_fill(~expanded_mask, float('-inf'))
+
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
