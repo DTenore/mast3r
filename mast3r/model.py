@@ -89,8 +89,6 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 
 class DinoMASt3R(AsymmetricMASt3R):
     def __init__(self, dino_model=None, top_k=0.75, 
-                hidden_dim_enc=512,  # hidden dimension for the encoder branch
-                hidden_dim_dec=512,  # hidden dimension for the decoder branch
                 **kwargs):
         super().__init__(**kwargs)
 

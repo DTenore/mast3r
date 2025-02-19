@@ -33,13 +33,13 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 # --- Dataset Definition ---
 class MapFreeDataset(Dataset):
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, num_scenes=460):
         self.root_dir = os.path.abspath(root_dir)
         self.frame_pairs = []
         
         # Find all scene directories: e.g. s00000, s00005, etc.
         scene_dirs = sorted(glob.glob(os.path.join(self.root_dir, "s*")))
-        scene_dirs = scene_dirs[:20]  # for testing purposes
+        scene_dirs = scene_dirs[:num_scenes]  # for testing purposes
 
         for scene_dir in tqdm.tqdm(scene_dirs, desc="Loading scenes", dynamic_ncols=True):
             scene_dir = os.path.abspath(scene_dir)
@@ -226,14 +226,25 @@ def main():
     # Parameters
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     root_dir = "/home/dario/DATASETS/map-free-reloc/data/mapfree/train"  # adjust to your dataset root
-    num_epochs = 10
+
     lr = 1e-3
+    num_epochs = 10
+    num_scenes = 20  # Number of scenes to use for training
+
     batch_size = 1        # If you want to accumulate 10 samples, often you set batch_size=1
     accumulation_steps = 10  # Number of iterations to accumulate before stepping
+    
     top_k = 0.75  # parameter passed to the DinoMASt3R constructor
 
+    optimize_alpha = True  # If True, we optimize the alpha parameter
+    init_alpha = 0.0  # Initial value for alpha
+    optimize_local_features = True  # If True, we optimize the local features
+    
+    use_huber = True  # If True, we use the Huber loss instead of L2
+    huber_beta = 1.0  # Huber delta parameter
+
     # Create the dataset and dataloader
-    dataset = MapFreeDataset(root_dir)
+    dataset = MapFreeDataset(root_dir, num_scenes=num_scenes)
     # WIP: collate used because of weird tuple stuff
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda x: x[0])
 
@@ -256,22 +267,26 @@ def main():
     
 
 
-    # Freeze all parameters except alpha.
+    # Freeze all parameters.
     for param in mast3r_model.parameters():
         param.requires_grad = False
-    mast3r_model.alpha.requires_grad = True
-    mast3r_model.alpha = torch.nn.Parameter(torch.tensor(0.0, device=device, dtype=torch.float32))
-    
-    for name, param in mast3r_model.downstream_head1.head_local_features.named_parameters():
-        param.requires_grad = True
-    for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
-        param.requires_grad = True
-    
 
-    # Setup optimizer (only optimizing alpha)
-    params_to_optimize = list(mast3r_model.downstream_head1.head_local_features.parameters()) \
-                       + list(mast3r_model.downstream_head2.head_local_features.parameters()) \
-                       + [mast3r_model.alpha]
+    params_to_optimize = []
+
+    # Unfreeze the local features and alpha parameter. (if flags set)
+    if optimize_alpha:
+        mast3r_model.alpha.requires_grad = True
+        mast3r_model.alpha = torch.nn.Parameter(torch.tensor(init_alpha, device=device, dtype=torch.float32))
+        params_to_optimize.append(mast3r_model.alpha)
+    if optimize_local_features:    
+        for name, param in mast3r_model.downstream_head1.head_local_features.named_parameters():
+            param.requires_grad = True
+            params_to_optimize.append(param)
+
+        for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
+            param.requires_grad = True
+            params_to_optimize.append(param)
+
     optimizer = optim.Adam(params_to_optimize, lr=lr)
     
     mast3r_model.train()
@@ -345,7 +360,7 @@ def main():
 
 
             # Compute the reprojection loss.
-            loss = reprojection_loss(pts3d_pred, points2d_obs, T_ref, T_query, K_rescaled, use_huber=True, huber_beta=1.0)
+            loss = reprojection_loss(pts3d_pred, points2d_obs, T_ref, T_query, K_rescaled, use_huber=use_huber, huber_beta=huber_beta)
             
             # ------------------------
             # Gradient Accumulation
@@ -376,11 +391,34 @@ def main():
             pbar.update(1)
     
     pbar.close()
+
     # Optionally, save the finetuned model
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    ckpt_name = f"/home/dario/_MINE/mast3r/Z/checkpoints/finetuned_dinomast3r_{timestamp}.pth"
-    torch.save(mast3r_model.state_dict(), ckpt_name)
-    print("Training finished and model saved at", ckpt_name)
+    timestamp = time.strftime("%Y%m%d_%H%M")
+    final_alpha = mast3r_model.alpha.item() if optimize_alpha else init_alpha
+
+    # Shorthand: "A" means alpha optimized, "NA" means not;
+    # "D" means local features (desc) optimized, "ND" means not;
+    # "H" means huber loss used, "NH" means not.
+    alpha_opt_str = "A" if optimize_alpha else "NA"
+    desc_opt_str = "D" if optimize_local_features else "ND"
+    huber_str = "H" if use_huber else "NH"
+
+    init_alpha_str = f"{init_alpha:.1f}".replace(".", "c")
+    final_alpha_str = f"{final_alpha:.4f}".replace(".", "c")
+    huber_beta_str = f"{huber_beta:.1f}".replace(".", "c")
+
+
+    ckpt_name = (
+        f"{timestamp}_"
+        f"{alpha_opt_str}_{desc_opt_str}_{huber_str}_"
+        f"e{num_epochs}_sc{num_scenes}_topK{int(top_k * 100)}_"
+        f"aInit{init_alpha_str}_aFinal{final_alpha_str}_hb{huber_beta_str}.pth"
+    )
+
+    ckpt_path = "/home/dario/_MINE/mast3r/Z/checkpoints"
+    ckpt_out = os.path.join(ckpt_path, ckpt_name)
+    torch.save(mast3r_model.state_dict(), ckpt_out)
+    print("Training finished and model saved at", ckpt_out)
 
 if __name__ == "__main__":
     main()
