@@ -228,16 +228,16 @@ def main():
     root_dir = "/home/dario/DATASETS/map-free-reloc/data/mapfree/train"  # adjust to your dataset root
 
     lr = 1e-3
-    num_epochs = 10
-    num_scenes = 20  # Number of scenes to use for training
+    num_epochs = 5
+    num_scenes = 100  # Number of scenes to use for training
 
     batch_size = 1        # If you want to accumulate 10 samples, often you set batch_size=1
-    accumulation_steps = 10  # Number of iterations to accumulate before stepping
+    accumulation_steps = 16  # Number of iterations to accumulate before stepping
     
-    top_k = 0.75  # parameter passed to the DinoMASt3R constructor
+    top_k = 0.8  # parameter passed to the DinoMASt3R constructor
 
-    optimize_alpha = True  # If True, we optimize the alpha parameter
-    init_alpha = 0.0  # Initial value for alpha
+    optimize_alpha = False  # If True, we optimize the alpha parameter
+    init_alpha = 1.0  # Initial value for alpha
     optimize_local_features = True  # If True, we optimize the local features
     
     use_huber = True  # If True, we use the Huber loss instead of L2
@@ -286,6 +286,13 @@ def main():
         for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
             param.requires_grad = True
             params_to_optimize.append(param)
+
+    if True:
+        for name, param in mast3r_model.named_parameters():
+            if "sim_postprocess" in name:
+                param.requires_grad = True
+                params_to_optimize.append(param)
+
 
     optimizer = optim.Adam(params_to_optimize, lr=lr)
     

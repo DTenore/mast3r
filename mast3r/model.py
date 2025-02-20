@@ -111,6 +111,8 @@ class DinoMASt3R(AsymmetricMASt3R):
         # WIP:
         self.alpha = nn.Parameter(torch.tensor(1.0))
 
+        self.sim_postprocess = SimilarityResNet(hidden_channels=16)
+
     def _get_dino_features(self, view1, view2):
         """Extract DINO features and upsample to original resolution."""
         H1, W1 = view1['true_shape'][0]
@@ -180,35 +182,38 @@ class DinoMASt3R(AsymmetricMASt3R):
         return pooled
 
     def _create_adjacency_graphs(self, features1, features2, top_k):
-        # Flatten spatial dimensions (32, 24, 384) → (768, 384)
-        features1_flat = features1.reshape(features1.shape[0] * features1.shape[1], features1.shape[2])  # (768, 384)
-        features2_flat = features2.reshape(features2.shape[0] * features2.shape[1], features2.shape[2])  # (768, 384)
+        # Flatten spatial dimensions and compute raw similarity
+        features1_flat = features1.view(-1, features1.shape[-1])  # (N1, D)
+        features2_flat = features2.view(-1, features2.shape[-1])  # (N2, D)
+        similarity_matrix = torch.matmul(features1_flat, features2_flat.T)  # (N1, N2)
 
-        # Create distance matrix
-        similarity_matrix = torch.matmul(features1_flat, features2_flat.T)  # (768, 768)
+        # Optionally scale by self.alpha or do any other manipulations
+        similarity_matrix = similarity_matrix * self.alpha
 
-        # Get top-k by mutliplying values per row times percentage
-        k1 = int(similarity_matrix.shape[0] * top_k)
-        k2 = int(similarity_matrix.shape[1] * top_k)
+        # 1) Reshape to (B=1,1,N1,N2), pass through postprocessor
+        #    If your code supports a batch dimension, you'd do B,N,C,H,W carefully.
+        postproc_input = similarity_matrix.unsqueeze(0).unsqueeze(0)  # (1,1,N1,N2)
+        refined_sim = self.sim_postprocess(postproc_input)            # (1,1,N1,N2)
+        refined_sim = refined_sim.squeeze(0).squeeze(0)               # (N1,N2)
 
-        # Select top-K neighbors for 1 → 2
-        topk_values_1, topk_indices_1 = torch.topk(similarity_matrix, k1, dim=1)
-        adj_1_to_2 = torch.full_like(similarity_matrix, -float("inf"))
+        # 2) Then do top_k on the refined similarity
+        N1, N2 = refined_sim.shape
+        k1 = int(N2 * top_k)
+        k2 = int(N1 * top_k)
+
+        topk_values_1, topk_indices_1 = torch.topk(refined_sim, k1, dim=1)
+        adj_1_to_2 = torch.full_like(refined_sim, float('-inf'))
         adj_1_to_2.scatter_(1, topk_indices_1, topk_values_1)
 
-        # Select top-K neighbors for 2 → 1
-        topk_values_2, topk_indices_2 = torch.topk(similarity_matrix.T, k2, dim=1)  # Transpose for 2 → 1
-        adj_2_to_1 = torch.full_like(similarity_matrix.T, -float("inf"))
+        topk_values_2, topk_indices_2 = torch.topk(refined_sim.T, k2, dim=1)  # 2→1
+        adj_2_to_1 = torch.full_like(refined_sim.T, float('-inf'))
         adj_2_to_1.scatter_(1, topk_indices_2, topk_values_2)
 
-        # Create boolean mask for 1 → 2
-        mask_1_to_2 = (adj_1_to_2 != -float("inf"))
-        # Create boolean mask for 2 → 1
-        mask_2_to_1 = (adj_2_to_1 != -float("inf"))
+        mask_1_to_2 = (adj_1_to_2 != float('-inf'))
+        mask_2_to_1 = (adj_2_to_1 != float('-inf'))
 
-        scaled_similarity_matrix = similarity_matrix * self.alpha
-
-        return adj_1_to_2, mask_1_to_2, adj_2_to_1, mask_2_to_1, scaled_similarity_matrix
+        # Return the adjacency matrices, masks, and the refined similarities
+        return adj_1_to_2, mask_1_to_2, adj_2_to_1, mask_2_to_1, refined_sim
 
     def _plot_mask(self, mask1, mask2, x, y, orig_img1, orig_img2):
         """
@@ -450,3 +455,52 @@ class SparseCrossAttention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+
+
+class SimilarityResNet(nn.Module):
+    """
+    A small 'ResNet-like' block to refine similarity matrices.
+
+    We treat (N x N) as a single-channel image and run it through
+    two Conv2d layers with a residual (skip) connection in between.
+    """
+    def __init__(self, hidden_channels=16, kernel_size=3):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(
+            in_channels=1,
+            out_channels=hidden_channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(hidden_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.conv2 = nn.Conv2d(
+            in_channels=hidden_channels,
+            out_channels=1,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(1)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (B, 1, N, N) if batching, or (1, N, N) if single-sample.
+        """
+        identity = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        # Residual / skip connection
+        out = out + identity
+        out = self.relu(out)
+
+        return out
