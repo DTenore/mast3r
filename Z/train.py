@@ -9,8 +9,13 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import tqdm
 import warnings
+import time
+import shutil
 
 from transforms3d.quaternions import quat2mat
+
+# TensorBoard import
+from torch.utils.tensorboard import SummaryWriter
 
 # Adjust system path
 Z_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -25,7 +30,6 @@ from mast3r.model import DinoMASt3R
 from mast3r.fast_nn import fast_reciprocal_NNs
 from dust3r.inference import loss_of_one_batch
 from dust3r.utils.device import to_cpu, collate_with_cat
-import time
 
 # Suppress some warnings for clarity
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -63,7 +67,6 @@ class MapFreeDataset(Dataset):
                     'pose1': poses[frame1],
                     'pose2': poses[frame2]
                 })
-
 
     def _load_intrinsics(self, intrinsics_path):
         base_dir = os.path.dirname(intrinsics_path)
@@ -126,67 +129,27 @@ def pose_to_matrix(R, t):
     return T
 
 def reproject_points(pts3d, T_ref, T_query, K):
-    """
-    Reproject 3D points from the reference view into the query view.
-    Args:
-        pts3d (torch.Tensor): (N, 3) 3D points in ref frame.
-        T_ref (torch.Tensor): (4,4) ref pose.
-        T_query (torch.Tensor): (4,4) query pose.
-        K (torch.Tensor): (3,3) intrinsics for query view.
-    Returns:
-        pts2d (torch.Tensor): (N,2) projected 2D points.
-    """
     N = pts3d.shape[0]
     ones = torch.ones((N, 1), device=pts3d.device, dtype=pts3d.dtype)
-    pts3d_h = torch.cat([pts3d, ones], dim=1)  # (N, 4)
+    pts3d_h = torch.cat([pts3d, ones], dim=1)
     T_rel = T_query @ torch.inverse(T_ref)
-    pts3d_query_h = (T_rel @ pts3d_h.t()).t()  # (N, 4)
+    pts3d_query_h = (T_rel @ pts3d_h.t()).t()
     pts3d_query = pts3d_query_h[:, :3]
-    pts2d_h = (K @ pts3d_query.t()).t()  # (N, 3)
+    pts2d_h = (K @ pts3d_query.t()).t()
     pts2d = pts2d_h[:, :2] / pts2d_h[:, 2:3]
     return pts2d
 
-def reprojection_loss(pts3d_pred, pts2d_obs, T_ref, T_query, K, reduction='mean', use_huber=False, huber_beta=1.0):
-    """
-    Computes the reprojection loss.
-    Args:
-        pts3d_pred (torch.Tensor): (N, 3) predicted 3D points.
-        pts2d_obs (torch.Tensor): (N, 2) observed 2D keypoints in query view.
-        T_ref (torch.Tensor): (4,4) ref pose.
-        T_query (torch.Tensor): (4,4) query pose.
-        K (torch.Tensor): (3,3) intrinsics of query camera.
-        reduction (str): 'mean' | 'sum' | 'none'
-        use_huber (bool): If True, uses Huber (Smooth L1) loss
-        huber_beta (float): Delta parameter for Huber (Smooth L1). 
-                            PyTorch calls this 'beta' in Smooth L1.
-    """
-    # Reproject 3D points to the query view
-    pts2d_proj = reproject_points(pts3d_pred, T_ref, T_query, K)  # shape (N, 2)
+def reprojection_loss(pts3d_pred, pts2d_obs, T_ref, T_query, K, reduction='mean', huber_beta=40.0):
+    pts2d_proj = reproject_points(pts3d_pred, T_ref, T_query, K)
 
-    if use_huber:
-        # Smooth L1 operates element-wise (e.g. difference in x, difference in y).
-        # We'll reduce across (x,y) by summing or (commonly) by default inside Smooth L1
-        # but we still need to handle the 'reduction' logic ourselves if we want a 'sum' or 'mean' over all points.
-        # You can do it in multiple ways; here is one typical approach:
-        
-        # Step 1: compute per-point, per-coordinate Smooth L1
-        #   shape -> (N, 2) if reduction='none'
-        per_point_loss = F.smooth_l1_loss(
-            pts2d_proj, 
-            pts2d_obs, 
-            beta=huber_beta,        # 'beta' in PyTorch docs is the Huber delta threshold
-            reduction='none'
-        )
-        
-        # Step 2: sum over x,y so we have a single loss per point (N,)
-        per_point_loss = per_point_loss.sum(dim=1)  # shape: (N,)
-        
-    else:
-        # Original L2 norm approach
-        diff = pts2d_proj - pts2d_obs   # shape (N, 2)
-        per_point_loss = torch.norm(diff, dim=1)    # shape (N,)
-
-    # final reduction
+    per_point_loss = F.smooth_l1_loss(
+        pts2d_proj, 
+        pts2d_obs, 
+        beta=huber_beta,
+        reduction='none'
+    )
+    per_point_loss = per_point_loss.sum(dim=1)
+    
     if reduction == 'mean':
         return per_point_loss.mean()
     elif reduction == 'sum':
@@ -195,143 +158,110 @@ def reprojection_loss(pts3d_pred, pts2d_obs, T_ref, T_query, K, reduction='mean'
         return per_point_loss
 
 def scale_intrinsics(K, prev_w, prev_h, master_w, master_h):
-    """Scale the intrinsics matrix by a given factor ."""
-
     assert K.shape == (3, 3), f"Expected (3, 3), but got {K.shape=}"
-
-    scale_w = master_w / prev_w  # sizes of the images in the Mast3r dataset
-    scale_h = master_h / prev_h  # sizes of the images in the Mast3r dataset
-
+    scale_w = master_w / prev_w
+    scale_h = master_h / prev_h
     K_scaled = K.clone()
     K_scaled[0, 0] *= scale_w
     K_scaled[0, 2] *= scale_w
     K_scaled[1, 1] *= scale_h
     K_scaled[1, 2] *= scale_h
-
     return K_scaled
 
 # --- Inference Helper without no_grad ---
-def inference(pairs, model, device, batch_size=8, verbose=True):
+def inference_no_gradless(pairs, model, device, batch_size=8, verbose=True):
     result = []
     for i in tqdm.trange(0, len(pairs), batch_size, disable=not verbose):
         res = loss_of_one_batch(collate_with_cat(pairs[i:i + batch_size]), model, None, device)
         result.append(to_cpu(res))
-
     result = collate_with_cat(result, lists=False)
-
     return result
 
 # --- Main Training Script ---
 def main():
-    # Parameters
+    # Create TensorBoard log directory and clear if it exists
+    log_dir = "./runs/mast3r_experiment"
+    if os.path.exists(log_dir):
+        shutil.rmtree(log_dir)
+    writer = SummaryWriter(log_dir=log_dir)
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     root_dir = "/home/dario/DATASETS/map-free-reloc/data/mapfree/train"  # adjust to your dataset root
 
-    lr = 1e-3
-    num_epochs = 5
-    num_scenes = 100  # Number of scenes to use for training
+    lr = 1e-5
+    num_epochs = 10
+    num_scenes = 20  # Number of scenes to use for training
 
-    batch_size = 1        # If you want to accumulate 10 samples, often you set batch_size=1
-    accumulation_steps = 16  # Number of iterations to accumulate before stepping
-    
-    top_k = 0.8  # parameter passed to the DinoMASt3R constructor
+    batch_size = 1        
+    accumulation_steps = 16  
 
-    optimize_alpha = False  # If True, we optimize the alpha parameter
-    init_alpha = 1.0  # Initial value for alpha
-    optimize_local_features = True  # If True, we optimize the local features
-    
-    use_huber = True  # If True, we use the Huber loss instead of L2
-    huber_beta = 1.0  # Huber delta parameter
+    top_k = 0.8  
+    huber_beta = 100.0
+    optimize_local_features = True  
 
-    # Create the dataset and dataloader
     dataset = MapFreeDataset(root_dir, num_scenes=num_scenes)
-    # WIP: collate used because of weird tuple stuff
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda x: x[0])
 
-    # --- Load Dino model and instantiate DinoMASt3R ---
     print("Loading DINO model ...")
-
-    # Load dinov2 model via torch.hub
     dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
-    dino_model.eval()  # evaluation mode
+    dino_model.eval()
     dino_model.to(device)
     
     print("Instantiating DinoMASt3R model ...")
-    
-    # Instantiate the model using the pretrained weights.
     mast3r_model = DinoMASt3R.from_pretrained(
         "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric",
         dino_model=dino_model,
         top_k=top_k
     ).to(device)
     
-
-
-    # Freeze all parameters.
-    for param in mast3r_model.parameters():
+    for name, param in mast3r_model.named_parameters():
         param.requires_grad = False
+
 
     params_to_optimize = []
 
-    # Unfreeze the local features and alpha parameter. (if flags set)
-    if optimize_alpha:
-        mast3r_model.alpha.requires_grad = True
-        mast3r_model.alpha = torch.nn.Parameter(torch.tensor(init_alpha, device=device, dtype=torch.float32))
-        params_to_optimize.append(mast3r_model.alpha)
     if optimize_local_features:    
-        for name, param in mast3r_model.downstream_head1.head_local_features.named_parameters():
-            param.requires_grad = True
-            params_to_optimize.append(param)
+        if False:
+            for name, param in mast3r_model.downstream_head1.head_local_features.named_parameters():
+                param.requires_grad = True
+                params_to_optimize.append(param)
+            for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
+                param.requires_grad = True
+                params_to_optimize.append(param)
+        for name, param in mast3r_model.named_parameters():
+            if "downstream_head1.dpt.head" in name or "downstream_head2.dpt.head" in name:
+                param.requires_grad = True
+                params_to_optimize.append(param)
 
-        for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
-            param.requires_grad = True
-            params_to_optimize.append(param)
-
-    if True:
+    if False:
         for name, param in mast3r_model.named_parameters():
             if "sim_postprocess" in name:
                 param.requires_grad = True
                 params_to_optimize.append(param)
 
-
     optimizer = optim.Adam(params_to_optimize, lr=lr)
-    
     mast3r_model.train()
 
-    # ---- Gradient Accumulation add-ons ----
     optimizer.zero_grad()
     running_loss = 0.0
-    accumulation_count = 0  # Counts how many samples have been accumulated
+    accumulation_count = 0
+    global_step = 0
 
-    # Training loop with tqdm progress bar
     pbar = tqdm.tqdm(total=len(dataloader) * num_epochs, desc="Training", dynamic_ncols=True)
     for epoch in range(num_epochs):
         for sample in dataloader:
-            # sample is a dict containing:
-            #   'img': [img1, img2] as file paths
-            #   'K': list of two dicts; each dict has key 'K' (tensor 3x3)
-            #   'R': list of two tensors (3x3)
-            #   't': list of two tensors (3,)
-            #   'true_shape': list of tuples (H, W)
             imgs = sample['img']  
-
             images = [tuple(load_images(imgs, size=512, verbose=False))]
-            output = inference(images, mast3r_model, device, batch_size=1, verbose=False)
-
-            # Expected output: a dict with keys 'view1', 'pred1', 'view2', 'pred2'
+            output = inference_no_gradless(images, mast3r_model, device, batch_size=1, verbose=False)
             view1 = output['view1']
             pred1 = output['pred1']
             view2 = output['view2']
             pred2 = output['pred2']
             
-            # Get descriptors from both views (do not detach in training)
-            desc1 = pred1['desc'].squeeze(0)  # e.g. (H, W, C)
+            desc1 = pred1['desc'].squeeze(0)
             desc2 = pred2['desc'].squeeze(0)
-            
-            # Compute 2D-2D matches using the fast NN routine.
             matches_im0, matches_im1 = fast_reciprocal_NNs(desc1, desc2, subsample_or_initxy1=8,
                                                            device=device, dist='dot', block_size=2**13)
-            # Get image shapes from views (assumed to be stored in view['true_shape'])
             H0, W0 = (int(x) for x in view1['true_shape'][0])
             H1, W1 = (int(x) for x in view2['true_shape'][0])
             valid_matches_im0 = (matches_im0[:, 0] >= 3) & (matches_im0[:, 0] < W0 - 3) & \
@@ -346,80 +276,55 @@ def main():
                 pbar.update(1)
                 continue
 
-            # Get predicted 3D points from view1 (assumed shape (1,H,W,3)); remove batch dim.
-            pts3d_im0 = pred1['pts3d'].squeeze(0)  # shape (H, W, 3)
-            pts3d_pred = pts3d_im0[matches_im0[:, 1], matches_im0[:, 0]].to(device)  # shape (N, 3)
-
-            # Use the matched keypoints in view2 as the observed 2D points.
-            points2d_obs = torch.from_numpy(matches_im1).to(device)  # shape (N, 2)
+            pts3d_im0 = pred1['pts3d'].squeeze(0)
+            pts3d_pred = pts3d_im0[matches_im0[:, 1], matches_im0[:, 0]].to(device)
+            points2d_obs = torch.from_numpy(matches_im1).to(device)
             
-            # Get ground-truth poses from the sample.
-            R_ref = sample['R'][0].squeeze(0).to(device)  # shape (3,3)
-            t_ref = sample['t'][0].squeeze(0).to(device)    # shape (3,)
+            R_ref = sample['R'][0].squeeze(0).to(device)
+            t_ref = sample['t'][0].squeeze(0).to(device)
             R_query = sample['R'][1].squeeze(0).to(device)
             t_query = sample['t'][1].squeeze(0).to(device)
-            T_ref = pose_to_matrix(R_ref, t_ref).to(device)  # shape (4,4)
+            T_ref = pose_to_matrix(R_ref, t_ref).to(device)
             T_query = pose_to_matrix(R_query, t_query).to(device)
             
-            # Get query camera intrinsics.
             K_query = sample['K'][1].to(device)
             K_rescaled = scale_intrinsics(K_query, sample['true_shape'][0][1], sample['true_shape'][0][0], W0, H0)
 
-
-            # Compute the reprojection loss.
-            loss = reprojection_loss(pts3d_pred, points2d_obs, T_ref, T_query, K_rescaled, use_huber=use_huber, huber_beta=huber_beta)
+            loss = reprojection_loss(pts3d_pred, points2d_obs, T_ref, T_query, K_rescaled, huber_beta=huber_beta)
             
-            # ------------------------
-            # Gradient Accumulation
-            # ------------------------
-            # We divide the loss by accumulation_steps so the gradients
-            # end up being the average over these steps (like a bigger batch).
             (loss / accumulation_steps).backward()
-
             running_loss += loss.item()
             accumulation_count += 1
 
-            # Only update the model after 'accumulation_steps' samples
             if accumulation_count % accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-
-                # Compute average loss for display
                 avg_loss = running_loss / accumulation_steps
                 running_loss = 0.0
 
-                # Update progress bar description
+                # Log metrics to TensorBoard
+                writer.add_scalar("Loss/train", avg_loss, global_step)
+                global_step += 1
+
                 pbar.set_description(
                     f"Epoch {epoch+1}/{num_epochs} "
                     f"Loss: {avg_loss:.4f} "
-                    f"| alpha: {mast3r_model.alpha.item():.4f}"
                 )
 
             pbar.update(1)
     
     pbar.close()
+    writer.close()
 
-    # Optionally, save the finetuned model
     timestamp = time.strftime("%Y%m%d_%H%M")
-    final_alpha = mast3r_model.alpha.item() if optimize_alpha else init_alpha
-
-    # Shorthand: "A" means alpha optimized, "NA" means not;
-    # "D" means local features (desc) optimized, "ND" means not;
-    # "H" means huber loss used, "NH" means not.
-    alpha_opt_str = "A" if optimize_alpha else "NA"
     desc_opt_str = "D" if optimize_local_features else "ND"
-    huber_str = "H" if use_huber else "NH"
-
-    init_alpha_str = f"{init_alpha:.1f}".replace(".", "c")
-    final_alpha_str = f"{final_alpha:.4f}".replace(".", "c")
-    huber_beta_str = f"{huber_beta:.1f}".replace(".", "c")
-
+    huber_beta_str = f"{huber_beta:.0f}"
 
     ckpt_name = (
         f"{timestamp}_"
-        f"{alpha_opt_str}_{desc_opt_str}_{huber_str}_"
+        f"{desc_opt_str}_"
         f"e{num_epochs}_sc{num_scenes}_topK{int(top_k * 100)}_"
-        f"aInit{init_alpha_str}_aFinal{final_alpha_str}_hb{huber_beta_str}.pth"
+        f"hb{huber_beta_str}.pth"
     )
 
     ckpt_path = "/home/dario/_MINE/mast3r/Z/checkpoints"

@@ -108,9 +108,6 @@ class DinoMASt3R(AsymmetricMASt3R):
 
         self.top_k = top_k
 
-        # WIP:
-        self.alpha = nn.Parameter(torch.tensor(1.0))
-
         self.sim_postprocess = SimilarityResNet(hidden_channels=16)
 
     def _get_dino_features(self, view1, view2):
@@ -187,14 +184,16 @@ class DinoMASt3R(AsymmetricMASt3R):
         features2_flat = features2.view(-1, features2.shape[-1])  # (N2, D)
         similarity_matrix = torch.matmul(features1_flat, features2_flat.T)  # (N1, N2)
 
-        # Optionally scale by self.alpha or do any other manipulations
-        similarity_matrix = similarity_matrix * self.alpha
+        if False:
+            # 1) Reshape to (B=1,1,N1,N2), pass through postprocessor
+            #    If your code supports a batch dimension, you'd do B,N,C,H,W carefully.
+            postproc_input = similarity_matrix.unsqueeze(0).unsqueeze(0)  # (1,1,N1,N2)
+            refined_sim = self.sim_postprocess(postproc_input)            # (1,1,N1,N2)
+            refined_sim = refined_sim.squeeze(0).squeeze(0)               # (N1,N2)
 
-        # 1) Reshape to (B=1,1,N1,N2), pass through postprocessor
-        #    If your code supports a batch dimension, you'd do B,N,C,H,W carefully.
-        postproc_input = similarity_matrix.unsqueeze(0).unsqueeze(0)  # (1,1,N1,N2)
-        refined_sim = self.sim_postprocess(postproc_input)            # (1,1,N1,N2)
-        refined_sim = refined_sim.squeeze(0).squeeze(0)               # (N1,N2)
+        # WIP pain.jpg
+        refined_sim = similarity_matrix
+
 
         # 2) Then do top_k on the refined similarity
         N1, N2 = refined_sim.shape
@@ -441,8 +440,6 @@ class SparseCrossAttention(nn.Module):
             #print(f"Min attn: {torch.min(attn).item():.4f}")     
             attn = attn.masked_fill(~expanded_mask, float('-inf'))
         else:
-            # WIP: make alpha trainable
-
             attn = attn + similarities
             expanded_mask = mask.unsqueeze(0).unsqueeze(0).expand(B, self.num_heads, -1, -1)   
             attn = attn.masked_fill(~expanded_mask, float('-inf'))
