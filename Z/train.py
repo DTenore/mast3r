@@ -58,7 +58,7 @@ class MapFreeDataset(Dataset):
             
             frame1 = os.path.join(scene_dir, "seq0", "frame_00000.jpg")
             frames_seq1 = sorted(glob.glob(os.path.join(scene_dir, "seq1", "frame_*.jpg")))
-            for frame2 in frames_seq1[::5]:
+            for frame2 in frames_seq1[::20]: # FIXME: change back to [::5] 
                 self.frame_pairs.append({
                     'frame1': frame1,
                     'frame2': frame2,
@@ -178,9 +178,9 @@ def inference_no_gradless(pairs, model, device, batch_size=8, verbose=True):
     return result
 
 # --- Main Training Script ---
-def main():
+def train():
     # Create TensorBoard log directory and clear if it exists
-    log_dir = "./runs/mast3r_experiment"
+    log_dir = "/home/dario/_MINE/mast3r/Z/_runs"
     if os.path.exists(log_dir):
         shutil.rmtree(log_dir)
     writer = SummaryWriter(log_dir=log_dir)
@@ -188,26 +188,28 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     root_dir = "/home/dario/DATASETS/map-free-reloc/data/mapfree/train"  # adjust to your dataset root
 
-    lr = 1e-5
-    num_epochs = 10
-    num_scenes = 20  # Number of scenes to use for training
+
+    lr = 1e-4
+    num_epochs = 4
+    num_scenes = 460  # Number of scenes to use for training
 
     batch_size = 1        
     accumulation_steps = 16  
 
     top_k = 0.8  
-    huber_beta = 100.0
+    huber_beta = 90.0
     optimize_local_features = True  
+    optimize_postprocess = False
 
     dataset = MapFreeDataset(root_dir, num_scenes=num_scenes)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=lambda x: x[0])
 
-    print("Loading DINO model ...")
+    # Loading DINO model ...
     dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False)
     dino_model.eval()
     dino_model.to(device)
     
-    print("Instantiating DinoMASt3R model ...")
+    # Instantiating DinoMASt3R model ...
     mast3r_model = DinoMASt3R.from_pretrained(
         "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric",
         dino_model=dino_model,
@@ -217,23 +219,21 @@ def main():
     for name, param in mast3r_model.named_parameters():
         param.requires_grad = False
 
-
     params_to_optimize = []
 
     if optimize_local_features:    
-        if False:
-            for name, param in mast3r_model.downstream_head1.head_local_features.named_parameters():
-                param.requires_grad = True
-                params_to_optimize.append(param)
-            for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
-                param.requires_grad = True
-                params_to_optimize.append(param)
+        for name, param in mast3r_model.downstream_head1.head_local_features.named_parameters():
+            param.requires_grad = True
+            params_to_optimize.append(param)
+        for name, param in mast3r_model.downstream_head2.head_local_features.named_parameters():
+            param.requires_grad = True
+            params_to_optimize.append(param)
         for name, param in mast3r_model.named_parameters():
-            if "downstream_head1.dpt.head" in name or "downstream_head2.dpt.head" in name:
+            if "downstream_head1.dpt.act_postprocess" in name or "downstream_head2.dpt.act_postprocess" in name:
                 param.requires_grad = True
                 params_to_optimize.append(param)
 
-    if False:
+    if optimize_postprocess:
         for name, param in mast3r_model.named_parameters():
             if "sim_postprocess" in name:
                 param.requires_grad = True
@@ -247,8 +247,22 @@ def main():
     accumulation_count = 0
     global_step = 0
 
+    # Create a tqdm progress bar for all epochs and iterations
     pbar = tqdm.tqdm(total=len(dataloader) * num_epochs, desc="Training", dynamic_ncols=True)
+
     for epoch in range(num_epochs):
+        # Add 1 warmup epoch
+        if epoch < 1:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr / 100
+        else:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
+
+        # Initialize epoch-level loss accumulators
+        epoch_loss_total = 0.0
+        epoch_sample_count = 0
+        
         for sample in dataloader:
             imgs = sample['img']  
             images = [tuple(load_images(imgs, size=512, verbose=False))]
@@ -292,6 +306,10 @@ def main():
 
             loss = reprojection_loss(pts3d_pred, points2d_obs, T_ref, T_query, K_rescaled, huber_beta=huber_beta)
             
+            # Accumulate epoch loss for epoch-average computation
+            epoch_loss_total += loss.item()
+            epoch_sample_count += 1
+
             (loss / accumulation_steps).backward()
             running_loss += loss.item()
             accumulation_count += 1
@@ -302,28 +320,37 @@ def main():
                 avg_loss = running_loss / accumulation_steps
                 running_loss = 0.0
 
-                # Log metrics to TensorBoard
-                writer.add_scalar("Loss/train", avg_loss, global_step)
+                # Compute epoch average loss so far (as an int)
+                epoch_avg_loss_so_far = epoch_loss_total / epoch_sample_count
+                # Log instantaneous loss to TensorBoard
+                writer.add_scalar("Loss", avg_loss, global_step)
                 global_step += 1
 
+                # Update tqdm description with both the accumulation loss and the epoch average loss (as ints)
                 pbar.set_description(
-                    f"Epoch {epoch+1}/{num_epochs} "
-                    f"Loss: {avg_loss:.4f} "
+                    f"Epoch: {epoch+1}/{num_epochs} | Avg: {int(epoch_avg_loss_so_far)} | Acc: {int(avg_loss)} Training"
                 )
 
             pbar.update(1)
+        
+        # At the end of each epoch, log the epoch average loss to TensorBoard
+        epoch_avg_loss = epoch_loss_total / epoch_sample_count if epoch_sample_count > 0 else 0.0
+        writer.add_scalar("Epoch Average Loss", epoch_avg_loss, epoch+1)
     
     pbar.close()
     writer.close()
 
     timestamp = time.strftime("%Y%m%d_%H%M")
     desc_opt_str = "D" if optimize_local_features else "ND"
+    postprocess_str = "P" if optimize_postprocess else "NP"
     huber_beta_str = f"{huber_beta:.0f}"
 
     ckpt_name = (
         f"{timestamp}_"
         f"{desc_opt_str}_"
+        f"{postprocess_str}_"
         f"e{num_epochs}_sc{num_scenes}_topK{int(top_k * 100)}_"
+        f"ac{accumulation_steps}_"
         f"hb{huber_beta_str}.pth"
     )
 
@@ -333,4 +360,4 @@ def main():
     print("Training finished and model saved at", ckpt_out)
 
 if __name__ == "__main__":
-    main()
+    train()
